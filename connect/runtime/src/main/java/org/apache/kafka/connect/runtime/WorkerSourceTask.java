@@ -78,6 +78,8 @@ class WorkerSourceTask extends WorkerTask {
     private final OffsetStorageWriter offsetWriter;
     private final Time time;
     private final SourceTaskMetricsGroup sourceTaskMetricsGroup;
+    private boolean transactionalSourceCommit;
+    private boolean inTransaction;
 
     private List<SourceRecord> toSend;
     private boolean lastSendFailed; // Whether the last send failed *synchronously*, i.e. never made it into the producer's RecordAccumulator
@@ -139,6 +141,13 @@ class WorkerSourceTask extends WorkerTask {
     public void initialize(TaskConfig taskConfig) {
         try {
             this.taskConfig = taskConfig.originalsStrings();
+            this.transactionalSourceCommit = workerConfig.getBoolean(WorkerConfig.TRANSACTIONAL_SOURCE_COMMIT);
+            this.taskConfig = taskConfig.originalsStrings();
+            if (transactionalSourceCommit) {
+                producer.initTransactions();
+                log.info("Init transaction for producer.");
+                producer.beginTransaction();
+            }
         } catch (Throwable t) {
             log.error("{} Task failed initialization and will not be started.", this, t);
             onFailure(t);
@@ -213,6 +222,12 @@ class WorkerSourceTask extends WorkerTask {
                         onResume();
                     }
                     continue;
+                }
+                synchronized (this) {
+                    if (flushing && transactionalSourceCommit) {
+                        Thread.sleep(1000);
+                        continue;
+                    }
                 }
 
                 if (toSend == null) {
@@ -412,12 +427,13 @@ class WorkerSourceTask extends WorkerTask {
             // to persistent storage
 
             // Next we need to wait for all outstanding messages to finish sending
-            log.info("{} flushing {} outstanding messages for offset commit", this, outstandingMessages.size());
-            while (!outstandingMessages.isEmpty()) {
+            int messageSize = (transactionalSourceCommit ? outstandingMessagesBacklog.size() : 0) + outstandingMessages.size();
+            log.info("{} flushing {} outstanding messages for offset commit", this, messageSize);
+            while (!outstandingMessages.isEmpty() || (transactionalSourceCommit && !outstandingMessagesBacklog.isEmpty())) {
                 try {
                     long timeoutMs = timeout - time.milliseconds();
                     if (timeoutMs <= 0) {
-                        log.error("{} Failed to flush, timed out while waiting for producer to flush outstanding {} messages", this, outstandingMessages.size());
+                        log.error("{} Failed to flush, timed out while waiting for producer to flush outstanding {} messages", this, messageSize);
                         finishFailedFlush();
                         recordCommitFailure(time.milliseconds() - started, null);
                         return false;
@@ -523,6 +539,10 @@ class WorkerSourceTask extends WorkerTask {
         outstandingMessages = outstandingMessagesBacklog;
         outstandingMessagesBacklog = temp;
         flushing = false;
+        if (transactionalSourceCommit) {
+            producer.commitTransaction();
+            producer.beginTransaction();
+        }
     }
 
     @Override
