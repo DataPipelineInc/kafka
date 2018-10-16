@@ -26,7 +26,6 @@ import org.apache.kafka.connect.util.ConnectorTaskId;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,7 +81,7 @@ public class ConnectProtocol {
         struct.set(CONFIG_OFFSET_KEY_NAME, workerState.offset());
         List<Struct> subs = new ArrayList<>();
         setAssignmentStruct(workerState.subscription().asMap(), subs);
-        struct.set(SUBSCRIPTION_KEY_NAME, subs);
+        struct.set(SUBSCRIPTION_KEY_NAME, subs.toArray());
         ByteBuffer buffer = ByteBuffer.allocate(CONNECT_PROTOCOL_HEADER_V0.sizeOf() + CONFIG_STATE_V0.sizeOf(struct));
         CONNECT_PROTOCOL_HEADER_V0.writeTo(buffer);
         CONFIG_STATE_V0.write(buffer, struct);
@@ -214,8 +213,8 @@ public class ConnectProtocol {
         }
 
         public Subscription() {
-            this.connectorIds = Collections.emptyList();
-            this.taskIds = Collections.emptyList();
+            this.connectorIds = new ArrayList<>();
+            this.taskIds = new ArrayList<>();
         }
 
         public List<String> connectors() {
