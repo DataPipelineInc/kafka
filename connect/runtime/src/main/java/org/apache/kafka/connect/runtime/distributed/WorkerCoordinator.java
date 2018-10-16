@@ -36,8 +36,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * This class manages the coordination process with the Kafka group coordinator on the broker for managing assignments
@@ -54,6 +56,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     private ClusterConfigState configSnapshot;
     private final WorkerRebalanceListener listener;
     private LeaderState leaderState;
+    private ConnectProtocol.Subscription subscription;
 
     private boolean rejoinRequested;
 
@@ -91,6 +94,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         new WorkerCoordinatorMetrics(metrics, metricGrpPrefix);
         this.listener = listener;
         this.rejoinRequested = false;
+        this.subscription = new ConnectProtocol.Subscription();
     }
 
     public void requestRejoin() {
@@ -134,10 +138,11 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         } while (remaining > 0);
     }
 
+
     @Override
     public List<ProtocolMetadata> metadata() {
         configSnapshot = configStorage.snapshot();
-        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset());
+        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset(), subscription);
         ByteBuffer metadata = ConnectProtocol.serializeMetadata(workerState);
         return Collections.singletonList(new ProtocolMetadata(DEFAULT_SUBPROTOCOL, metadata));
     }
@@ -151,6 +156,8 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         // up to date, try to rejoin again, leaving the group and backing off, etc.).
         rejoinRequested = false;
         listener.onAssigned(assignmentSnapshot, generation);
+        subscription.connectors().addAll(assignmentSnapshot.connectors());
+        subscription.tasks().addAll(assignmentSnapshot.tasks());
     }
 
     @Override
@@ -166,7 +173,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         if (leaderOffset == null)
             return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.CONFIG_MISMATCH,
                     leaderId, memberConfigs.get(leaderId).url(), maxOffset,
-                    new HashMap<String, List<String>>(), new HashMap<String, List<ConnectorTaskId>>());
+                    new HashMap<String, List<String>>(), new HashMap<String, List<ConnectorTaskId>>(), Collections.<String, List<String>>emptyMap(), Collections.<String, List<ConnectorTaskId>>emptyMap());
         return performTaskAssignment(leaderId, leaderOffset, memberConfigs);
     }
 
@@ -211,6 +218,8 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     private Map<String, ByteBuffer> performTaskAssignment(String leaderId, long maxOffset, Map<String, ConnectProtocol.WorkerState> memberConfigs) {
         Map<String, List<String>> connectorAssignments = new HashMap<>();
         Map<String, List<ConnectorTaskId>> taskAssignments = new HashMap<>();
+        Map<String, List<String>> revokedConnectorAssignments = new HashMap<>();
+        Map<String, List<ConnectorTaskId>> revokedTaskAssignments = new HashMap<>();
 
         // Perform round-robin task assignment. Assign all connectors and then all tasks because assigning both the
         // connector and its tasks can lead to very uneven distribution of work in some common cases (e.g. for connectors
@@ -242,10 +251,46 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
             }
         }
 
+        Set<String> allRevokedConnectors = new HashSet();
+        Set<ConnectorTaskId> allRevokedTasks = new HashSet();
+        
+        for (Map.Entry<String, ConnectProtocol.WorkerState> entry : memberConfigs.entrySet()) {
+            String memberId = entry.getKey();
+            ConnectProtocol.Subscription lastSubscription = entry.getValue().subscription();
+
+            List<String> revokedConnectors = new ArrayList<>(lastSubscription.connectors());
+            List<ConnectorTaskId> revokedTasks = new ArrayList<>(lastSubscription.tasks());
+
+            List<String> assignedConnectors = connectorAssignments.get(memberId);
+            List<ConnectorTaskId> assignedTasks = taskAssignments.get(memberId);
+
+            // get revoked
+            if (connectorAssignments.get(memberId) != null) {
+                revokedConnectors.removeAll(assignedConnectors);
+            }
+            if (taskAssignments.get(memberId) != null) {
+                revokedTasks.removeAll(assignedTasks);
+            }
+            // remove all existing
+            assignedConnectors.removeAll(lastSubscription.connectors());
+            assignedTasks.removeAll(lastSubscription.tasks());
+
+            // add to all revoked
+            allRevokedConnectors.addAll(revokedConnectors);
+            allRevokedTasks.addAll(revokedTasks);
+
+            // remove all revoked
+            assignedConnectors.removeAll(allRevokedConnectors);
+            assignedTasks.removeAll(allRevokedTasks);
+
+            revokedConnectorAssignments.put(memberId, revokedConnectors);
+            revokedTaskAssignments.put(memberId, revokedTasks);
+        }
+        
         this.leaderState = new LeaderState(memberConfigs, connectorAssignments, taskAssignments);
 
         return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.NO_ERROR,
-                leaderId, memberConfigs.get(leaderId).url(), maxOffset, connectorAssignments, taskAssignments);
+                leaderId, memberConfigs.get(leaderId).url(), maxOffset, connectorAssignments, taskAssignments, revokedConnectorAssignments, revokedTaskAssignments);
     }
 
     private Map<String, ByteBuffer> fillAssignmentsAndSerialize(Collection<String> members,
@@ -254,17 +299,30 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                                                                 String leaderUrl,
                                                                 long maxOffset,
                                                                 Map<String, List<String>> connectorAssignments,
-                                                                Map<String, List<ConnectorTaskId>> taskAssignments) {
+                                                                Map<String,
+                                                                    List<ConnectorTaskId>> taskAssignments,
+                                                                Map<String, List<String>>
+                                                                    revokedConnectorAssignments,
+                                                                Map<String,
+                                                                    List<ConnectorTaskId>>
+                                                                    revokedTaskAssignments) {
 
         Map<String, ByteBuffer> groupAssignment = new HashMap<>();
         for (String member : members) {
             List<String> connectors = connectorAssignments.get(member);
+            List<String> revokedConnectors = revokedConnectorAssignments.get(member);
             if (connectors == null)
                 connectors = Collections.emptyList();
+            if (revokedConnectors == null)
+                revokedConnectors = Collections.emptyList();
             List<ConnectorTaskId> tasks = taskAssignments.get(member);
+            List<ConnectorTaskId> revokedTasks = revokedTaskAssignments.get(member);
             if (tasks == null)
                 tasks = Collections.emptyList();
-            ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(error, leaderId, leaderUrl, maxOffset, connectors, tasks);
+            if (revokedTasks == null)
+                tasks = Collections.emptyList();
+            ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(error,
+                leaderId, leaderUrl, maxOffset, connectors, tasks, revokedConnectors, revokedTasks);
             log.debug("Assignment: {} -> {}", member, assignment);
             groupAssignment.put(member, ConnectProtocol.serializeAssignment(assignment));
         }

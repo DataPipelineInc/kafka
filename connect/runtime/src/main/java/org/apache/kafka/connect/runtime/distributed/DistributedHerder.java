@@ -1192,6 +1192,30 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // group membership actions (e.g., we may need to explicitly leave the group if we cannot handle the
             // assigned tasks).
             log.info("Joined group and got assignment: {}", assignment);
+            List<Callable<Void>> callables = new ArrayList<>();
+            for (final String connectorName : assignment.revokedConnectors()) {
+                callables.add(getConnectorStoppingCallable(connectorName));
+            }
+
+            // TODO: We need to at least commit task offsets, but if we could commit offsets & pause them instead of
+            // stopping them then state could continue to be reused when the task remains on this worker. For example,
+            // this would avoid having to close a connection and then reopen it when the task is assigned back to this
+            // worker again.
+            for (final ConnectorTaskId taskId : assignment.revokedTasks()) {
+                callables.add(getTaskStoppingCallable(taskId));
+            }
+
+            // The actual timeout for graceful task stop is applied in worker's stopAndAwaitTask method.
+            startAndStop(callables);
+            if (!callables.isEmpty()) {
+                member.requestRejoin();
+                statusBackingStore.flush();
+                log.info("Finished stopping tasks after rebalance");
+            }
+            // Ensure that all status updates have been pushed to the storage system before rebalancing.
+            // Otherwise, we may inadvertently overwrite the state with a stale value after the rebalance
+            // completes.
+
             synchronized (DistributedHerder.this) {
                 DistributedHerder.this.assignment = assignment;
                 DistributedHerder.this.generation = generation;
@@ -1219,7 +1243,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // it is still important to have a leader that can write configs, offsets, etc.
 
             if (rebalanceResolved) {
-                // TODO: Technically we don't have to stop connectors at all until we know they've really been removed from
+/*                // TODO: Technically we don't have to stop connectors at all until we know they've really been removed from
                 // this worker. Instead, we can let them continue to run but buffer any update requests (which should be
                 // rare anyway). This would avoid a steady stream of start/stop, which probably also includes lots of
                 // unnecessary repeated connections to the source/sink system.
@@ -1243,7 +1267,8 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
                 // Otherwise, we may inadvertently overwrite the state with a stale value after the rebalance
                 // completes.
                 statusBackingStore.flush();
-                log.info("Finished stopping tasks in preparation for rebalance");
+                log.info("Finished stopping tasks in preparation for rebalance");*/
+                log.info("Rebalance Resolved without stopping");
             } else {
                 log.info("Wasn't unable to resume work after last rebalance, can skip stopping connectors and tasks");
             }
