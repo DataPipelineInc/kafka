@@ -173,7 +173,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         if (leaderOffset == null)
             return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.CONFIG_MISMATCH,
                     leaderId, memberConfigs.get(leaderId).url(), maxOffset,
-                    new HashMap<String, List<String>>(), new HashMap<String, List<ConnectorTaskId>>(), Collections.<String, List<String>>emptyMap(), Collections.<String, List<ConnectorTaskId>>emptyMap());
+                    new HashMap<String, List<String>>(), new HashMap<>(), Collections.emptyMap(), Collections.<String, List<ConnectorTaskId>>emptyMap());
         return performTaskAssignment(leaderId, leaderOffset, memberConfigs);
     }
 
@@ -251,8 +251,16 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
             }
         }
 
-        Set<String> allRevokedConnectors = new HashSet();
-        Set<ConnectorTaskId> allRevokedTasks = new HashSet();
+        Set<String> allRevokedConnectors = new HashSet<>();
+        Set<ConnectorTaskId> allRevokedTasks = new HashSet<>();
+        final Set<String> allConnectors = new HashSet<>();
+        for (List<String> list : connectorAssignments.values()) {
+            allConnectors.addAll(list);
+        }
+        Set<ConnectorTaskId> allTasks = new HashSet<>();
+        for (List<ConnectorTaskId> list : taskAssignments.values()) {
+            allTasks.addAll(list);
+        }
         
         for (Map.Entry<String, ConnectProtocol.WorkerState> entry : memberConfigs.entrySet()) {
             String memberId = entry.getKey();
@@ -264,24 +272,34 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
             List<String> assignedConnectors = connectorAssignments.get(memberId);
             List<ConnectorTaskId> assignedTasks = taskAssignments.get(memberId);
 
-            // get revoked
-            if (connectorAssignments.get(memberId) != null) {
+            if (assignedConnectors != null) {
                 revokedConnectors.removeAll(assignedConnectors);
+                assignedConnectors.removeAll(lastSubscription.connectors());
             }
             if (taskAssignments.get(memberId) != null) {
                 revokedTasks.removeAll(assignedTasks);
+                assignedTasks.removeAll(lastSubscription.tasks());
             }
-            // remove all existing
-            assignedConnectors.removeAll(lastSubscription.connectors());
-            assignedTasks.removeAll(lastSubscription.tasks());
 
             // add to all revoked
             allRevokedConnectors.addAll(revokedConnectors);
             allRevokedTasks.addAll(revokedTasks);
 
             // remove all revoked
-            assignedConnectors.removeAll(allRevokedConnectors);
-            assignedTasks.removeAll(allRevokedTasks);
+            if (assignedConnectors != null) {
+                assignedConnectors.removeAll(allRevokedConnectors);
+            }
+            if (assignedTasks != null) {
+                assignedTasks.removeAll(allRevokedTasks);
+            }
+
+            List<String> revokedConnectorsCopy = new ArrayList<>(revokedConnectors);
+            revokedConnectorsCopy.removeAll(allConnectors);
+            revokedConnectors.removeAll(revokedConnectorsCopy);
+
+            List<ConnectorTaskId> revokedTasksCopy = new ArrayList<>(revokedTasks);
+            revokedTasksCopy.removeAll(allTasks);
+            revokedTasks.removeAll(revokedTasksCopy);
 
             revokedConnectorAssignments.put(memberId, revokedConnectors);
             revokedTaskAssignments.put(memberId, revokedTasks);
