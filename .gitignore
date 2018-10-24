@@ -47,5 +47,4 @@ tests/venv
 docs/generated/
 
 .release-settings.json
-.editorconfig
 
