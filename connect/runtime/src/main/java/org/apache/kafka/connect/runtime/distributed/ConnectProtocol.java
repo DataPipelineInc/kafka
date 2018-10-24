@@ -32,7 +32,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * This class implements the protocol for Kafka Connect workers in a group. It includes the format of worker state used when
+ * This class implements the protocol for Kafka Connect workers in a group. It includes the format of worker state
+ * used when
  * joining the group and distributing assignments, and the format of assignments of connectors and tasks to workers.
  */
 public class ConnectProtocol {
@@ -51,29 +52,29 @@ public class ConnectProtocol {
 
     public static final short CONNECT_PROTOCOL_V0 = 0;
     public static final Schema CONNECT_PROTOCOL_HEADER_SCHEMA = new Schema(
-        new Field(VERSION_KEY_NAME, Type.INT16));
+            new Field(VERSION_KEY_NAME, Type.INT16));
     private static final Struct CONNECT_PROTOCOL_HEADER_V0 = new Struct(CONNECT_PROTOCOL_HEADER_SCHEMA)
-        .set(VERSION_KEY_NAME, CONNECT_PROTOCOL_V0);
+            .set(VERSION_KEY_NAME, CONNECT_PROTOCOL_V0);
 
     // Assignments for each worker are a set of connectors and tasks. These are categorized by connector ID. A sentinel
     // task ID (CONNECTOR_TASK) is used to indicate the connector itself (i.e. that the assignment includes
     // responsibility for running the Connector instance in addition to any tasks it generates).
     public static final Schema CONNECTOR_ASSIGNMENT_V0 = new Schema(
-        new Field(CONNECTOR_KEY_NAME, Type.STRING),
-        new Field(TASKS_KEY_NAME, new ArrayOf(Type.INT32)));
+            new Field(CONNECTOR_KEY_NAME, Type.STRING),
+            new Field(TASKS_KEY_NAME, new ArrayOf(Type.INT32)));
 
     public static final Schema CONFIG_STATE_V0 = new Schema(
-        new Field(URL_KEY_NAME, Type.STRING),
-        new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
-        new Field(SUBSCRIPTION_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
+            new Field(URL_KEY_NAME, Type.STRING),
+            new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
+            new Field(SUBSCRIPTION_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
 
     public static final Schema ASSIGNMENT_V0 = new Schema(
-        new Field(ERROR_KEY_NAME, Type.INT16),
-        new Field(LEADER_KEY_NAME, Type.STRING),
-        new Field(LEADER_URL_KEY_NAME, Type.STRING),
-        new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
-        new Field(ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)),
-        new Field(REVOKED_ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
+            new Field(ERROR_KEY_NAME, Type.INT16),
+            new Field(LEADER_KEY_NAME, Type.STRING),
+            new Field(LEADER_URL_KEY_NAME, Type.STRING),
+            new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
+            new Field(ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)),
+            new Field(REVOKED_ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
 
     public static ByteBuffer serializeMetadata(WorkerState workerState) {
         Struct struct = new Struct(CONFIG_STATE_V0);
@@ -122,7 +123,7 @@ public class ConnectProtocol {
     }
 
     private static void setAssignmentStruct(Map<String, List<Integer>> map, List<Struct>
-        structArray) {
+            structArray) {
         for (Map.Entry<String, List<Integer>> connectorEntry : map.entrySet()) {
             Struct taskAssignment = new Struct(CONNECTOR_ASSIGNMENT_V0);
             taskAssignment.set(CONNECTOR_KEY_NAME, connectorEntry.getKey());
@@ -148,10 +149,11 @@ public class ConnectProtocol {
         deserializeAssignmentsStruct(struct, connectorIds, taskIds, ASSIGNMENT_KEY_NAME);
         deserializeAssignmentsStruct(struct, revokedConnectorIds, revokedTaskIds, REVOKED_ASSIGNMENT_KEY_NAME);
         return new Assignment(error, leader, leaderUrl, offset, connectorIds, taskIds,
-            revokedConnectorIds, revokedTaskIds);
+                              revokedConnectorIds, revokedTaskIds);
     }
 
-    private static void deserializeAssignmentsStruct(Struct struct, List<String> connectorIds, List<ConnectorTaskId> taskIds, String assignmentKeyName) {
+    private static void deserializeAssignmentsStruct(Struct struct, List<String> connectorIds,
+                                                     List<ConnectorTaskId> taskIds, String assignmentKeyName) {
         for (Object structObj : struct.getArray(assignmentKeyName)) {
             Struct assignment = (Struct) structObj;
             String connector = assignment.getString(CONNECTOR_KEY_NAME);
@@ -197,9 +199,9 @@ public class ConnectProtocol {
         @Override
         public String toString() {
             return "WorkerState{" +
-                "url='" + url + '\'' +
-                ", offset=" + offset +
-                '}';
+                    "url='" + url + '\'' +
+                    ", offset=" + offset +
+                    '}';
         }
     }
 
@@ -284,7 +286,7 @@ public class ConnectProtocol {
 
         public Assignment(short error, String leader, String leaderUrl, long configOffset,
                           List<String> connectorIds, List<ConnectorTaskId> taskIds, List<String>
-                              revokedConnectorIds, List<ConnectorTaskId> revokedTaskIds) {
+                                  revokedConnectorIds, List<ConnectorTaskId> revokedTaskIds) {
             this.error = error;
             this.leader = leader;
             this.leaderUrl = leaderUrl;
@@ -334,15 +336,15 @@ public class ConnectProtocol {
         @Override
         public String toString() {
             return "Assignment{" +
-                "error=" + error +
-                ", leader='" + leader + '\'' +
-                ", leaderUrl='" + leaderUrl + '\'' +
-                ", offset=" + offset +
-                ", connectorIds=" + connectorIds +
-                ", taskIds=" + taskIds +
-                ", revokedConnectorIds=" + revokedConnectorIds +
-                ", revokedTaskIds=" + revokedTaskIds +
-                '}';
+                    "error=" + error +
+                    ", leader='" + leader + '\'' +
+                    ", leaderUrl='" + leaderUrl + '\'' +
+                    ", offset=" + offset +
+                    ", connectorIds=" + connectorIds +
+                    ", taskIds=" + taskIds +
+                    ", revokedConnectorIds=" + revokedConnectorIds +
+                    ", revokedTaskIds=" + revokedTaskIds +
+                    '}';
         }
 
         private Map<String, List<Integer>> asMap() {
