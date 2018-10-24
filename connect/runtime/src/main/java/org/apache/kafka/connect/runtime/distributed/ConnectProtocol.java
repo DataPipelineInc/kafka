@@ -32,8 +32,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * This class implements the protocol for Kafka Connect workers in a group. It includes the format of worker state
- * used when
+ * This class implements the protocol for Kafka Connect workers in a group. It includes the format of worker state used when
  * joining the group and distributing assignments, and the format of assignments of connectors and tasks to workers.
  */
 public class ConnectProtocol {
