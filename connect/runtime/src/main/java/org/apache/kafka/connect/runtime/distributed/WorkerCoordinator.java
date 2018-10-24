@@ -76,18 +76,17 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                              String restUrl,
                              ConfigBackingStore configStorage,
                              WorkerRebalanceListener listener) {
-        super(
-                logContext,
-                client,
-                groupId,
-                rebalanceTimeoutMs,
-                sessionTimeoutMs,
-                heartbeatIntervalMs,
-                metrics,
-                metricGrpPrefix,
-                time,
-                retryBackoffMs,
-                true);
+        super(logContext,
+              client,
+              groupId,
+              rebalanceTimeoutMs,
+              sessionTimeoutMs,
+              heartbeatIntervalMs,
+              metrics,
+              metricGrpPrefix,
+              time,
+              retryBackoffMs,
+              true);
         this.log = logContext.logger(WorkerCoordinator.class);
         this.restUrl = restUrl;
         this.configStorage = configStorage;
@@ -175,15 +174,16 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         long maxOffset = findMaxMemberConfigOffset(memberConfigs);
         Long leaderOffset = ensureLeaderConfig(maxOffset);
         if (leaderOffset == null)
-            return fillAssignmentsAndSerialize(memberConfigs.keySet(),
-                                               ConnectProtocol.Assignment.CONFIG_MISMATCH,
-                                               leaderId,
-                                               memberConfigs.get(leaderId).url(),
-                                               maxOffset,
-                                               new HashMap<String, List<String>>(),
-                                               new HashMap<String, List<ConnectorTaskId>>(),
-                                               new HashMap<String, List<String>>(),
-                                               new HashMap<String, List<ConnectorTaskId>>());
+            return fillAssignmentsAndSerialize(
+                    memberConfigs.keySet(),
+                    ConnectProtocol.Assignment.CONFIG_MISMATCH,
+                    leaderId,
+                    memberConfigs.get(leaderId).url(),
+                    maxOffset,
+                    new HashMap<String, List<String>>(),
+                    new HashMap<String, List<ConnectorTaskId>>(),
+                    new HashMap<String, List<String>>(),
+                    new HashMap<String, List<ConnectorTaskId>>());
         return performTaskAssignment(leaderId, leaderOffset, memberConfigs);
     }
 
@@ -345,14 +345,15 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                 tasks = Collections.emptyList();
             if (revokedTasks == null)
                 tasks = Collections.emptyList();
-            ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(error,
-                                                                                   leaderId,
-                                                                                   leaderUrl,
-                                                                                   maxOffset,
-                                                                                   connectors,
-                                                                                   tasks,
-                                                                                   revokedConnectors,
-                                                                                   revokedTasks);
+            ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(
+                    error,
+                    leaderId,
+                    leaderUrl,
+                    maxOffset,
+                    connectors,
+                    tasks,
+                    revokedConnectors,
+                    revokedTasks);
             log.debug("Assignment: {} -> {}", member, assignment);
             groupAssignment.put(member, ConnectProtocol.serializeAssignment(assignment));
         }
