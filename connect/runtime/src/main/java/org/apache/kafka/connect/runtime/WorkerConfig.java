@@ -177,6 +177,7 @@ public class WorkerConfig extends AbstractConfig {
     public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
     public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
 
+    public static final String FORCE_TRX = "force.trx";
     /**
      * Get a basic ConfigDef for a WorkerConfig. This includes all the common settings. Subclasses can use this to
      * bootstrap their own ConfigDef.
@@ -184,6 +185,7 @@ public class WorkerConfig extends AbstractConfig {
      */
     protected static ConfigDef baseConfigDef() {
         return new ConfigDef()
+                .define(FORCE_TRX, Type.BOOLEAN, false, Importance.LOW, "force transaction offset and records")
                 .define(BOOTSTRAP_SERVERS_CONFIG, Type.LIST, BOOTSTRAP_SERVERS_DEFAULT,
                         Importance.HIGH, BOOTSTRAP_SERVERS_DOC)
                 .define(KEY_CONVERTER_CLASS_CONFIG, Type.CLASS,

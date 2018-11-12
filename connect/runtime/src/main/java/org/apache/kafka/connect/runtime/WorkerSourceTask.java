@@ -87,6 +87,7 @@ class WorkerSourceTask extends WorkerTask {
     private Map<String, String> taskConfig;
     private boolean finishedStart = false;
     private boolean startedShutdownBeforeStartCompleted = false;
+    private boolean forceTransaction;
 
     public WorkerSourceTask(ConnectorTaskId id,
                             SourceTask task,
@@ -104,7 +105,6 @@ class WorkerSourceTask extends WorkerTask {
                             ClassLoader loader,
                             Time time) {
         super(id, statusListener, initialState, loader, connectMetrics);
-
         this.workerConfig = workerConfig;
         this.task = task;
         this.keyConverter = keyConverter;
@@ -128,7 +128,11 @@ class WorkerSourceTask extends WorkerTask {
     @Override
     public void initialize(TaskConfig taskConfig) {
         try {
+            this.forceTransaction =workerConfig.getBoolean(WorkerConfig.FORCE_TRX);
             this.taskConfig = taskConfig.originalsStrings();
+            if (forceTransaction) {
+                producer.initTransactions();
+            }
         } catch (Throwable t) {
             log.error("{} Task failed initialization and will not be started.", this, t);
             onFailure(t);
@@ -191,6 +195,10 @@ class WorkerSourceTask extends WorkerTask {
                 if (toSend == null)
                     continue;
                 log.debug("{} About to send " + toSend.size() + " records to Kafka", this);
+
+                if (flushing && forceTransaction) {
+                    Thread.sleep(1000);
+                }
                 if (!sendRecords())
                     stopRequestedLatch.await(SEND_FAILED_BACKOFF_MS, TimeUnit.MILLISECONDS);
             }
@@ -285,6 +293,7 @@ class WorkerSourceTask extends WorkerTask {
         toSend = null;
         return true;
     }
+
 
     private RecordHeaders convertHeaderFor(SourceRecord record) {
         Headers headers = record.headers();
@@ -427,6 +436,7 @@ class WorkerSourceTask extends WorkerTask {
         log.info("{} Finished commitOffsets successfully in {} ms",
                 this, durationMillis);
 
+        producer.commitTransaction();
         commitSourceTask();
 
         return true;
