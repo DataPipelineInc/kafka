@@ -88,6 +88,7 @@ class WorkerSourceTask extends WorkerTask {
     private boolean finishedStart = false;
     private boolean startedShutdownBeforeStartCompleted = false;
     private boolean forceTransaction;
+    private boolean inTransaction;
 
     public WorkerSourceTask(ConnectorTaskId id,
                             SourceTask task,
@@ -128,10 +129,11 @@ class WorkerSourceTask extends WorkerTask {
     @Override
     public void initialize(TaskConfig taskConfig) {
         try {
-            this.forceTransaction =workerConfig.getBoolean(WorkerConfig.FORCE_TRX);
+            this.forceTransaction = workerConfig.getBoolean(WorkerConfig.FORCE_TRX);
             this.taskConfig = taskConfig.originalsStrings();
             if (forceTransaction) {
                 producer.initTransactions();
+                log.info("Init transaction for producer.");
             }
         } catch (Throwable t) {
             log.error("{} Task failed initialization and will not be started.", this, t);
@@ -254,6 +256,10 @@ class WorkerSourceTask extends WorkerTask {
             }
             try {
                 final String topic = producerRecord.topic();
+                if (forceTransaction && !inTransaction) {
+                    producer.beginTransaction();
+                    inTransaction = true;
+                }
                 producer.send(
                         producerRecord,
                         new Callback() {
@@ -293,7 +299,6 @@ class WorkerSourceTask extends WorkerTask {
         toSend = null;
         return true;
     }
-
 
     private RecordHeaders convertHeaderFor(SourceRecord record) {
         Headers headers = record.headers();
@@ -435,8 +440,10 @@ class WorkerSourceTask extends WorkerTask {
         recordCommitSuccess(durationMillis);
         log.info("{} Finished commitOffsets successfully in {} ms",
                 this, durationMillis);
-
-        producer.commitTransaction();
+        if (forceTransaction) {
+            producer.commitTransaction();
+            inTransaction = false;
+        }
         commitSourceTask();
 
         return true;

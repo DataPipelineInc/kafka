@@ -455,7 +455,9 @@ public class Worker {
                     internalKeyConverter, internalValueConverter);
             OffsetStorageWriter offsetWriter = new OffsetStorageWriter(offsetBackingStore, id.connector(),
                     internalKeyConverter, internalValueConverter);
-            producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, connConfig.getString("dptask.id"));
+            if (config.getBoolean(WorkerConfig.FORCE_TRX)) {
+                producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, connConfig.originals().get("dptask.id"));
+            }
             KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(producerProps);
             return new WorkerSourceTask(id, (SourceTask) task, statusListener, initialState, keyConverter, valueConverter,
                     headerConverter, transformationChain, producer, offsetReader, offsetWriter, config, metrics, loader, time);
