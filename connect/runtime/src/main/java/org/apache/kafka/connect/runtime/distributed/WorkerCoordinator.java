@@ -172,14 +172,9 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         long maxOffset = findMaxMemberConfigOffset(memberConfigs);
         Long leaderOffset = ensureLeaderConfig(maxOffset);
         if (leaderOffset == null)
-            return fillAssignmentsAndSerialize(
-                    memberConfigs.keySet(),
-                    ConnectProtocol.Assignment.CONFIG_MISMATCH,
-                    leaderId,
-                    memberConfigs.get(leaderId).url(),
-                    maxOffset,
-                    new HashMap<String, List<String>>(),
-                    new HashMap<String, List<ConnectorTaskId>>(),
+            return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.CONFIG_MISMATCH,
+                    leaderId, memberConfigs.get(leaderId).url(), maxOffset,
+                    new HashMap<String, List<String>>(), new HashMap<String, List<ConnectorTaskId>>(),
                     new HashMap<String, List<String>>(),
                     new HashMap<String, List<ConnectorTaskId>>());
         return performTaskAssignment(leaderId, leaderOffset, memberConfigs);
@@ -212,7 +207,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
             ClusterConfigState updatedSnapshot = configStorage.snapshot();
             if (updatedSnapshot.offset() < maxOffset) {
                 log.info("Was selected to perform assignments, but do not have latest config found in sync request. " +
-                                 "Returning an empty configuration to trigger re-sync.");
+                        "Returning an empty configuration to trigger re-sync.");
                 return null;
             } else {
                 configSnapshot = updatedSnapshot;
@@ -258,8 +253,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     }
 
 
-    private Map<String, ByteBuffer> performTaskAssignment(String leaderId, long maxOffset, Map<String,
-            ConnectProtocol.WorkerState> memberConfigs) {
+    private Map<String, ByteBuffer> performTaskAssignment(String leaderId, long maxOffset, Map<String, ConnectProtocol.WorkerState> memberConfigs) {
         List<String> currentAllConnectors = sorted(configSnapshot.connectors());
         Set<ConnectorTaskId> currAllTasksSet = new HashSet<>();
         for (String connector : configSnapshot.connectors()) {
