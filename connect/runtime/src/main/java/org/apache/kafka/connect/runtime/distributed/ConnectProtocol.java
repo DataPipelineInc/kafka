@@ -45,15 +45,23 @@ public class ConnectProtocol {
     public static final String ERROR_KEY_NAME = "error";
     public static final String TASKS_KEY_NAME = "tasks";
     public static final String ASSIGNMENT_KEY_NAME = "assignment";
-    public static final String SUBSCRIPTION_KEY_NAME = "subscription";
     public static final String REVOKED_ASSIGNMENT_KEY_NAME = "revoked-assignment";
+    public static final String CONNECTOR_ASSIGNMENTS_KEY_NAME = "resource";
     public static final int CONNECTOR_TASK = -1;
 
     public static final short CONNECT_PROTOCOL_V0 = 0;
+    public static final short CONNECT_PROTOCOL_V1 = 0;
     public static final Schema CONNECT_PROTOCOL_HEADER_SCHEMA = new Schema(
             new Field(VERSION_KEY_NAME, Type.INT16));
     private static final Struct CONNECT_PROTOCOL_HEADER_V0 = new Struct(CONNECT_PROTOCOL_HEADER_SCHEMA)
             .set(VERSION_KEY_NAME, CONNECT_PROTOCOL_V0);
+    private static final Struct CONNECT_PROTOCOL_HEADER_V1 = new Struct(CONNECT_PROTOCOL_HEADER_SCHEMA)
+            .set(VERSION_KEY_NAME, CONNECT_PROTOCOL_V1);
+
+    public static final Schema CONFIG_STATE_V0 = new Schema(
+            new Field(URL_KEY_NAME, Type.STRING),
+            new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64));
+
 
     // Assignments for each worker are a set of connectors and tasks. These are categorized by connector ID. A sentinel
     // task ID (CONNECTOR_TASK) is used to indicate the connector itself (i.e. that the assignment includes
@@ -62,12 +70,14 @@ public class ConnectProtocol {
             new Field(CONNECTOR_KEY_NAME, Type.STRING),
             new Field(TASKS_KEY_NAME, new ArrayOf(Type.INT32)));
 
-    public static final Schema CONFIG_STATE_V0 = new Schema(
-            new Field(URL_KEY_NAME, Type.STRING),
-            new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
-            new Field(SUBSCRIPTION_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
-
     public static final Schema ASSIGNMENT_V0 = new Schema(
+            new Field(ERROR_KEY_NAME, Type.INT16),
+            new Field(LEADER_KEY_NAME, Type.STRING),
+            new Field(LEADER_URL_KEY_NAME, Type.STRING),
+            new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
+            new Field(ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
+
+    public static final Schema ASSIGNMENT_V1 = new Schema(
             new Field(ERROR_KEY_NAME, Type.INT16),
             new Field(LEADER_KEY_NAME, Type.STRING),
             new Field(LEADER_URL_KEY_NAME, Type.STRING),
@@ -75,16 +85,19 @@ public class ConnectProtocol {
             new Field(ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)),
             new Field(REVOKED_ASSIGNMENT_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
 
+    public static final Schema CONFIG_STATE_V1 = new Schema(
+            new Field(URL_KEY_NAME, Type.STRING),
+            new Field(CONFIG_OFFSET_KEY_NAME, Type.INT64),
+            new Field(CONNECTOR_ASSIGNMENTS_KEY_NAME, new ArrayOf(CONNECTOR_ASSIGNMENT_V0)));
+
     public static ByteBuffer serializeMetadata(WorkerState workerState) {
-        Struct struct = new Struct(CONFIG_STATE_V0);
+        Struct struct = new Struct(CONFIG_STATE_V1);
         struct.set(URL_KEY_NAME, workerState.url());
         struct.set(CONFIG_OFFSET_KEY_NAME, workerState.offset());
-        List<Struct> subs = new ArrayList<>();
-        setAssignmentStruct(workerState.subscription().asMap(), subs);
-        struct.set(SUBSCRIPTION_KEY_NAME, subs.toArray());
-        ByteBuffer buffer = ByteBuffer.allocate(CONNECT_PROTOCOL_HEADER_V0.sizeOf() + CONFIG_STATE_V0.sizeOf(struct));
-        CONNECT_PROTOCOL_HEADER_V0.writeTo(buffer);
-        CONFIG_STATE_V0.write(buffer, struct);
+        struct.set(CONNECTOR_ASSIGNMENTS_KEY_NAME, convertConnectorAssignmentMap(workerState.connectorAssignments().asMap()));
+        ByteBuffer buffer = ByteBuffer.allocate(CONNECT_PROTOCOL_HEADER_V1.sizeOf() + CONFIG_STATE_V1.sizeOf(struct));
+        CONNECT_PROTOCOL_HEADER_V1.writeTo(buffer);
+        CONFIG_STATE_V1.write(buffer, struct);
         buffer.flip();
         return buffer;
     }
@@ -93,36 +106,38 @@ public class ConnectProtocol {
         Struct header = CONNECT_PROTOCOL_HEADER_SCHEMA.read(buffer);
         Short version = header.getShort(VERSION_KEY_NAME);
         checkVersionCompatibility(version);
-        Struct struct = CONFIG_STATE_V0.read(buffer);
-        long configOffset = struct.getLong(CONFIG_OFFSET_KEY_NAME);
-        String url = struct.getString(URL_KEY_NAME);
-        List<ConnectorTaskId> tasks = new ArrayList<>();
-        List<String> connectors = new ArrayList<>();
-        deserializeAssignmentsStruct(struct, connectors, tasks, SUBSCRIPTION_KEY_NAME);
-        return new WorkerState(url, configOffset, new Subscription(connectors, tasks));
+        if (version == 0) {
+            Struct struct = CONFIG_STATE_V0.read(buffer);
+            long configOffset = struct.getLong(CONFIG_OFFSET_KEY_NAME);
+            String url = struct.getString(URL_KEY_NAME);
+            return new WorkerState(url, configOffset);
+        }
+        if (version == 1) {
+            Struct struct = CONFIG_STATE_V1.read(buffer);
+            long configOffset = struct.getLong(CONFIG_OFFSET_KEY_NAME);
+            String url = struct.getString(URL_KEY_NAME);
+            return new WorkerState(url, configOffset, convertToConnectorAssignments(struct, CONNECTOR_ASSIGNMENTS_KEY_NAME));
+        }
+        throw new SchemaException("Unsupported subscription version: " + version);
     }
 
     public static ByteBuffer serializeAssignment(Assignment assignment) {
-        Struct struct = new Struct(ASSIGNMENT_V0);
+        Struct struct = new Struct(ASSIGNMENT_V1);
         struct.set(ERROR_KEY_NAME, assignment.error());
         struct.set(LEADER_KEY_NAME, assignment.leader());
         struct.set(LEADER_URL_KEY_NAME, assignment.leaderUrl());
         struct.set(CONFIG_OFFSET_KEY_NAME, assignment.offset());
-        List<Struct> taskAssignments = new ArrayList<>();
-        List<Struct> revokedAssignments = new ArrayList<>();
-        setAssignmentStruct(assignment.asMap(), taskAssignments);
-        setAssignmentStruct(assignment.revokedAsMap(), revokedAssignments);
-        struct.set(ASSIGNMENT_KEY_NAME, taskAssignments.toArray());
-        struct.set(REVOKED_ASSIGNMENT_KEY_NAME, revokedAssignments.toArray());
-        ByteBuffer buffer = ByteBuffer.allocate(CONNECT_PROTOCOL_HEADER_V0.sizeOf() + ASSIGNMENT_V0.sizeOf(struct));
-        CONNECT_PROTOCOL_HEADER_V0.writeTo(buffer);
-        ASSIGNMENT_V0.write(buffer, struct);
+        struct.set(ASSIGNMENT_KEY_NAME, convertConnectorAssignmentMap(assignment.asMap()));
+        struct.set(REVOKED_ASSIGNMENT_KEY_NAME, convertConnectorAssignmentMap(assignment.revokedAsMap()));
+        ByteBuffer buffer = ByteBuffer.allocate(CONNECT_PROTOCOL_HEADER_V1.sizeOf() + ASSIGNMENT_V1.sizeOf(struct));
+        CONNECT_PROTOCOL_HEADER_V1.writeTo(buffer);
+        ASSIGNMENT_V1.write(buffer, struct);
         buffer.flip();
         return buffer;
     }
 
-    private static void setAssignmentStruct(Map<String, List<Integer>> map, List<Struct>
-            structArray) {
+    private static Object[] convertConnectorAssignmentMap(Map<String, List<Integer>> map) {
+        List<Struct> structArray = new ArrayList<>();
         for (Map.Entry<String, List<Integer>> connectorEntry : map.entrySet()) {
             Struct taskAssignment = new Struct(CONNECTOR_ASSIGNMENT_V0);
             taskAssignment.set(CONNECTOR_KEY_NAME, connectorEntry.getKey());
@@ -130,57 +145,69 @@ public class ConnectProtocol {
             taskAssignment.set(TASKS_KEY_NAME, tasks.toArray());
             structArray.add(taskAssignment);
         }
+        return structArray.toArray();
     }
 
     public static Assignment deserializeAssignment(ByteBuffer buffer) {
         Struct header = CONNECT_PROTOCOL_HEADER_SCHEMA.read(buffer);
         Short version = header.getShort(VERSION_KEY_NAME);
         checkVersionCompatibility(version);
-        Struct struct = ASSIGNMENT_V0.read(buffer);
-        short error = struct.getShort(ERROR_KEY_NAME);
-        String leader = struct.getString(LEADER_KEY_NAME);
-        String leaderUrl = struct.getString(LEADER_URL_KEY_NAME);
-        long offset = struct.getLong(CONFIG_OFFSET_KEY_NAME);
-        List<String> connectorIds = new ArrayList<>();
-        List<ConnectorTaskId> taskIds = new ArrayList<>();
-        List<String> revokedConnectorIds = new ArrayList<>();
-        List<ConnectorTaskId> revokedTaskIds = new ArrayList<>();
-        deserializeAssignmentsStruct(struct, connectorIds, taskIds, ASSIGNMENT_KEY_NAME);
-        deserializeAssignmentsStruct(struct, revokedConnectorIds, revokedTaskIds, REVOKED_ASSIGNMENT_KEY_NAME);
-        return new Assignment(error, leader, leaderUrl, offset, connectorIds, taskIds,
-                              revokedConnectorIds, revokedTaskIds);
+        if (version == 0) {
+            Struct struct = ASSIGNMENT_V0.read(buffer);
+            short error = struct.getShort(ERROR_KEY_NAME);
+            String leader = struct.getString(LEADER_KEY_NAME);
+            String leaderUrl = struct.getString(LEADER_URL_KEY_NAME);
+            long offset = struct.getLong(CONFIG_OFFSET_KEY_NAME);
+            ConnectorAssignments assignments = convertToConnectorAssignments(struct, ASSIGNMENT_KEY_NAME);
+            return new Assignment(error, leader, leaderUrl, offset, assignments.connectorIds, assignments.taskIds);
+
+        }
+        if (version == 1) {
+            Struct struct = ASSIGNMENT_V1.read(buffer);
+            short error = struct.getShort(ERROR_KEY_NAME);
+            String leader = struct.getString(LEADER_KEY_NAME);
+            String leaderUrl = struct.getString(LEADER_URL_KEY_NAME);
+            long offset = struct.getLong(CONFIG_OFFSET_KEY_NAME);
+            ConnectorAssignments assignments = convertToConnectorAssignments(struct, ASSIGNMENT_KEY_NAME);
+            ConnectorAssignments revokedAssignments = convertToConnectorAssignments(struct, REVOKED_ASSIGNMENT_KEY_NAME);
+            return new Assignment(error, leader, leaderUrl, offset, assignments.connectorIds, assignments.taskIds,
+                    revokedAssignments.connectorIds, revokedAssignments.taskIds);
+        }
+        throw new SchemaException("Unsupported subscription version: " + version);
     }
 
-    private static void deserializeAssignmentsStruct(Struct struct, List<String> connectorIds,
-                                                     List<ConnectorTaskId> taskIds, String assignmentKeyName) {
-        for (Object structObj : struct.getArray(assignmentKeyName)) {
+    private static ConnectorAssignments convertToConnectorAssignments(Struct struct, String keyName) {
+        List<String> connectorIds = new ArrayList<>();
+        List<ConnectorTaskId> taskIds = new ArrayList<>();
+        for (Object structObj : struct.getArray(keyName)) {
             Struct assignment = (Struct) structObj;
             String connector = assignment.getString(CONNECTOR_KEY_NAME);
             for (Object taskIdObj : assignment.getArray(TASKS_KEY_NAME)) {
                 Integer taskId = (Integer) taskIdObj;
-                if (taskId == CONNECTOR_TASK)
+                if (taskId == CONNECTOR_TASK) {
                     connectorIds.add(connector);
-                else
-                    taskIds.add(new ConnectorTaskId(connector, taskId));
+                } else
+                    taskIds.add(new ConnectorTaskId(connector, (Integer) taskIdObj));
             }
         }
+        return new ConnectorAssignments(connectorIds, taskIds);
     }
 
     public static class WorkerState {
         private final String url;
         private final long offset;
-        private final Subscription subscription;
+        private final ConnectorAssignments connectorAssignments;
 
         public WorkerState(String url, long offset) {
             this.url = url;
             this.offset = offset;
-            this.subscription = new Subscription();
+            this.connectorAssignments = new ConnectorAssignments();
         }
 
-        public WorkerState(String url, long offset, Subscription subscription) {
+        public WorkerState(String url, long offset, ConnectorAssignments connectorAssignments) {
             this.url = url;
             this.offset = offset;
-            this.subscription = subscription;
+            this.connectorAssignments = connectorAssignments;
         }
 
         public String url() {
@@ -191,8 +218,8 @@ public class ConnectProtocol {
             return offset;
         }
 
-        public Subscription subscription() {
-            return subscription;
+        public ConnectorAssignments connectorAssignments() {
+            return connectorAssignments;
         }
 
         @Override
@@ -200,20 +227,21 @@ public class ConnectProtocol {
             return "WorkerState{" +
                     "url='" + url + '\'' +
                     ", offset=" + offset +
+                    ", assignments=" + connectorAssignments +
                     '}';
         }
     }
 
-    public static class Subscription {
+    public static class ConnectorAssignments {
         private final List<String> connectorIds;
         private final List<ConnectorTaskId> taskIds;
 
-        public Subscription(List<String> connectorIds, List<ConnectorTaskId> taskIds) {
+        public ConnectorAssignments(List<String> connectorIds, List<ConnectorTaskId> taskIds) {
             this.connectorIds = connectorIds;
             this.taskIds = taskIds;
         }
 
-        public Subscription() {
+        public ConnectorAssignments() {
             this.connectorIds = new ArrayList<>();
             this.taskIds = new ArrayList<>();
         }
@@ -248,6 +276,14 @@ public class ConnectProtocol {
             }
             return taskMap;
         }
+
+        @Override
+        public String toString() {
+            return "Assignments{" +
+                    "connectorIds=" + connectorIds +
+                    ", taskIds=" + taskIds +
+                    '}';
+        }
     }
 
     public static class Assignment {
@@ -273,14 +309,7 @@ public class ConnectProtocol {
          */
         public Assignment(short error, String leader, String leaderUrl, long configOffset,
                           List<String> connectorIds, List<ConnectorTaskId> taskIds) {
-            this.error = error;
-            this.leader = leader;
-            this.leaderUrl = leaderUrl;
-            this.offset = configOffset;
-            this.taskIds = taskIds;
-            this.connectorIds = connectorIds;
-            this.revokedTaskIds = new ArrayList<>();
-            this.revokedConnectorIds = new ArrayList<>();
+            this(error, leader, leaderUrl, configOffset, connectorIds, taskIds, new ArrayList<String>(), new ArrayList<ConnectorTaskId>());
         }
 
         public Assignment(short error, String leader, String leaderUrl, long configOffset,

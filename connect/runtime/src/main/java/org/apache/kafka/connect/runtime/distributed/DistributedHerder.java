@@ -1243,7 +1243,8 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // it is still important to have a leader that can write configs, offsets, etc.
 
             if (rebalanceResolved) {
-/*                // TODO: Technically we don't have to stop connectors at all until we know they've really been removed from
+                /*
+                // TODO: Technically we don't have to stop connectors at all until we know they've really been removed from
                 // this worker. Instead, we can let them continue to run but buffer any update requests (which should be
                 // rare anyway). This would avoid a steady stream of start/stop, which probably also includes lots of
                 // unnecessary repeated connections to the source/sink system.
@@ -1267,7 +1268,8 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
                 // Otherwise, we may inadvertently overwrite the state with a stale value after the rebalance
                 // completes.
                 statusBackingStore.flush();
-                log.info("Finished stopping tasks in preparation for rebalance");*/
+                log.info("Finished stopping tasks in preparation for rebalance");
+                */
                 log.info("Rebalance Resolved without stopping");
             } else {
                 log.info("Wasn't unable to resume work after last rebalance, can skip stopping connectors and tasks");

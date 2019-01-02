@@ -16,7 +16,6 @@
  */
 package org.apache.kafka.connect.runtime.distributed;
 
-import com.google.common.collect.Iterables;
 import org.apache.kafka.clients.consumer.internals.AbstractCoordinator;
 import org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient;
 import org.apache.kafka.common.metrics.Measurable;
@@ -56,7 +55,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     private ClusterConfigState configSnapshot;
     private final WorkerRebalanceListener listener;
     private LeaderState leaderState;
-    private ConnectProtocol.Subscription subscription;
+    private ConnectProtocol.ConnectorAssignments connectorAssignments;
 
     private boolean rejoinRequested;
 
@@ -94,7 +93,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         new WorkerCoordinatorMetrics(metrics, metricGrpPrefix);
         this.listener = listener;
         this.rejoinRequested = false;
-        this.subscription = new ConnectProtocol.Subscription();
+        this.connectorAssignments = new ConnectProtocol.ConnectorAssignments();
     }
 
     public void requestRejoin() {
@@ -142,7 +141,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     @Override
     public List<ProtocolMetadata> metadata() {
         configSnapshot = configStorage.snapshot();
-        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset(), subscription);
+        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset(), connectorAssignments);
         ByteBuffer metadata = ConnectProtocol.serializeMetadata(workerState);
         return Collections.singletonList(new ProtocolMetadata(DEFAULT_SUBPROTOCOL, metadata));
     }
@@ -156,10 +155,10 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         // up to date, try to rejoin again, leaving the group and backing off, etc.).
         rejoinRequested = false;
         listener.onAssigned(assignmentSnapshot, generation);
-        subscription.connectors().addAll(assignmentSnapshot.connectors());
-        subscription.connectors().removeAll(assignmentSnapshot.revokedConnectors());
-        subscription.tasks().addAll(assignmentSnapshot.tasks());
-        subscription.tasks().removeAll(assignmentSnapshot.revokedTasks());
+        connectorAssignments.connectors().addAll(assignmentSnapshot.connectors());
+        connectorAssignments.connectors().removeAll(assignmentSnapshot.revokedConnectors());
+        connectorAssignments.tasks().addAll(assignmentSnapshot.tasks());
+        connectorAssignments.tasks().removeAll(assignmentSnapshot.revokedTasks());
     }
 
     @Override
@@ -246,7 +245,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     private <T> void assignForNewConfig(List<T> current, List<T> last, Collection<AssignState<T>> all) {
         for (T t : current) {
             if (!last.contains(t)) {
-                AssignState<T> smallest = Iterables.get(all, 0);
+                AssignState<T> smallest = all.iterator().next();
                 for (AssignState<T> as : all) {
                     if (as.current.size() < smallest.current.size()) {
                         smallest = as;
@@ -271,16 +270,16 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         List<String> lastAllConnectors = new ArrayList<>();
         List<ConnectorTaskId> lastAllTasks = new ArrayList<>();
         for (ConnectProtocol.WorkerState ws : memberConfigs.values()) {
-            lastAllConnectors.addAll(ws.subscription().connectors());
-            lastAllTasks.addAll(ws.subscription().tasks());
+            lastAllConnectors.addAll(ws.connectorAssignments().connectors());
+            lastAllTasks.addAll(ws.connectorAssignments().tasks());
         }
         Map<String, AssignState<String>> connectorsState = new HashMap<>();
         Map<String, AssignState<ConnectorTaskId>> tasksState = new HashMap<>();
         for (Map.Entry<String, ConnectProtocol.WorkerState> entry : memberConfigs.entrySet()) {
             String memberId = entry.getKey();
-            ConnectProtocol.Subscription lastSubscription = entry.getValue().subscription();
-            connectorsState.put(memberId, removeNonExists(lastSubscription.connectors(), currentAllConnectors));
-            tasksState.put(memberId, removeNonExists(lastSubscription.tasks(), currentAllTasks));
+            ConnectProtocol.ConnectorAssignments lastConnectorAssignments = entry.getValue().connectorAssignments();
+            connectorsState.put(memberId, removeNonExists(lastConnectorAssignments.connectors(), currentAllConnectors));
+            tasksState.put(memberId, removeNonExists(lastConnectorAssignments.tasks(), currentAllTasks));
         }
         // assign new added connectors and tasks
         assignForNewConfig(currentAllConnectors, lastAllConnectors, connectorsState.values());
