@@ -842,11 +842,15 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
         log.info("Starting connectors and tasks using config offset {}", assignment.offset());
         List<Callable<Void>> callables = new ArrayList<>();
         for (String connectorName : assignment.connectors()) {
-            callables.add(getConnectorStartingCallable(connectorName));
+            if (!worker.connectorNames().contains(connectorName)) {
+                callables.add(getConnectorStartingCallable(connectorName));
+            }
         }
 
         for (ConnectorTaskId taskId : assignment.tasks()) {
-            callables.add(getTaskStartingCallable(taskId));
+            if (!worker.taskIds().contains(taskId)) {
+                callables.add(getTaskStartingCallable(taskId));
+            }
         }
         startAndStop(callables);
         log.info("Finished starting connectors and tasks");
@@ -893,6 +897,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
     // context and add to the worker. This needs to be called from within the main worker thread for this herder.
     private boolean startConnector(String connectorName) {
         log.info("Starting connector {}", connectorName);
+        log.info(this.getClass().getClassLoader().getResource(this.getClass().getCanonicalName().replace(".", "/") + ".class").toString());
         final Map<String, String> configProps = configState.connectorConfig(connectorName);
         final ConnectorContext ctx = new HerderConnectorContext(this, connectorName);
         final TargetState initialState = configState.targetState(connectorName);
@@ -1243,7 +1248,6 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // it is still important to have a leader that can write configs, offsets, etc.
 
             if (rebalanceResolved) {
-                /*
                 // TODO: Technically we don't have to stop connectors at all until we know they've really been removed from
                 // this worker. Instead, we can let them continue to run but buffer any update requests (which should be
                 // rare anyway). This would avoid a steady stream of start/stop, which probably also includes lots of
@@ -1269,7 +1273,6 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
                 // completes.
                 statusBackingStore.flush();
                 log.info("Finished stopping tasks in preparation for rebalance");
-                */
                 log.info("Rebalance Resolved without stopping");
             } else {
                 log.info("Wasn't unable to resume work after last rebalance, can skip stopping connectors and tasks");
