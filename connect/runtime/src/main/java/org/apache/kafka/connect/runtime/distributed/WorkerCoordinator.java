@@ -23,7 +23,6 @@ import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.requests.JoinGroupRequest;
 import org.apache.kafka.common.requests.JoinGroupRequest.ProtocolMetadata;
-import org.apache.kafka.common.utils.CircularIterator;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.storage.ConfigBackingStore;
@@ -36,8 +35,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * This class manages the coordination process with the Kafka group coordinator on the broker for managing assignments
@@ -54,7 +55,6 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     private ClusterConfigState configSnapshot;
     private final WorkerRebalanceListener listener;
     private LeaderState leaderState;
-
     private boolean rejoinRequested;
 
     /**
@@ -134,10 +134,11 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         } while (remaining > 0);
     }
 
+
     @Override
     public List<ProtocolMetadata> metadata() {
         configSnapshot = configStorage.snapshot();
-        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset());
+        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset(), assignmentSnapshot);
         ByteBuffer metadata = ConnectProtocol.serializeMetadata(workerState);
         return Collections.singletonList(new ProtocolMetadata(DEFAULT_SUBPROTOCOL, metadata));
     }
@@ -150,7 +151,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         // tasks. It's the responsibility of the code driving this process to decide how to react (e.g. trying to get
         // up to date, try to rejoin again, leaving the group and backing off, etc.).
         rejoinRequested = false;
-        listener.onAssigned(assignmentSnapshot, generation);
+        listener.onAssigned(ConnectProtocol.deserializeAssignment(memberAssignment), generation);
     }
 
     @Override
@@ -166,7 +167,10 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         if (leaderOffset == null)
             return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.CONFIG_MISMATCH,
                     leaderId, memberConfigs.get(leaderId).url(), maxOffset,
-                    new HashMap<String, List<String>>(), new HashMap<String, List<ConnectorTaskId>>());
+                    new HashMap<String, List<String>>(),
+                    new HashMap<String, List<ConnectorTaskId>>(),
+                    new HashMap<String, List<String>>(),
+                    new HashMap<String, List<ConnectorTaskId>>());
         return performTaskAssignment(leaderId, leaderOffset, memberConfigs);
     }
 
@@ -184,7 +188,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         }
 
         log.debug("Max config offset root: {}, local snapshot config offsets root: {}",
-                maxOffset, configSnapshot.offset());
+                  maxOffset, configSnapshot.offset());
         return maxOffset;
     }
 
@@ -208,44 +212,95 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         return maxOffset;
     }
 
-    private Map<String, ByteBuffer> performTaskAssignment(String leaderId, long maxOffset, Map<String, ConnectProtocol.WorkerState> memberConfigs) {
-        Map<String, List<String>> connectorAssignments = new HashMap<>();
-        Map<String, List<ConnectorTaskId>> taskAssignments = new HashMap<>();
 
-        // Perform round-robin task assignment. Assign all connectors and then all tasks because assigning both the
-        // connector and its tasks can lead to very uneven distribution of work in some common cases (e.g. for connectors
-        // that generate only 1 task each; in a cluster of 2 or an even # of nodes, only even nodes will be assigned
-        // connectors and only odd nodes will be assigned tasks, but tasks are, on average, actually more resource
-        // intensive than connectors).
-        List<String> connectorsSorted = sorted(configSnapshot.connectors());
-        CircularIterator<String> memberIt = new CircularIterator<>(sorted(memberConfigs.keySet()));
-        for (String connectorId : connectorsSorted) {
-            String connectorAssignedTo = memberIt.next();
-            log.trace("Assigning connector {} to {}", connectorId, connectorAssignedTo);
-            List<String> memberConnectors = connectorAssignments.get(connectorAssignedTo);
-            if (memberConnectors == null) {
-                memberConnectors = new ArrayList<>();
-                connectorAssignments.put(connectorAssignedTo, memberConnectors);
+    private class AssignStatus<T> {
+        List<T> added = new ArrayList<>();
+        List<T> removed = new ArrayList<>();
+        List<T> current = new ArrayList<>();
+    }
+
+    private <T> AssignStatus<T> removeNonExists(List<T> lastAll, List<T> currentAll) {
+        AssignStatus<T> assignStatus = new AssignStatus<>();
+        for (T t : lastAll) {
+            if (currentAll.contains(t)) {
+                assignStatus.current.add(t);
+            } else {
+                assignStatus.removed.add(t);
             }
-            memberConnectors.add(connectorId);
         }
-        for (String connectorId : connectorsSorted) {
-            for (ConnectorTaskId taskId : sorted(configSnapshot.tasks(connectorId))) {
-                String taskAssignedTo = memberIt.next();
-                log.trace("Assigning task {} to {}", taskId, taskAssignedTo);
-                List<ConnectorTaskId> memberTasks = taskAssignments.get(taskAssignedTo);
-                if (memberTasks == null) {
-                    memberTasks = new ArrayList<>();
-                    taskAssignments.put(taskAssignedTo, memberTasks);
+        return assignStatus;
+    }
+
+    private <T> void assignForNewConfig(List<T> currentAll, List<T> lastAll, Collection<AssignStatus<T>> allMembers) {
+        for (T t : currentAll) {
+            if (!lastAll.contains(t)) {
+                AssignStatus<T> leastAssigned = allMembers.iterator().next();
+                for (AssignStatus<T> as : allMembers) {
+                    if (as.current.size() < leastAssigned.current.size()) {
+                        leastAssigned = as;
+                    }
                 }
-                memberTasks.add(taskId);
+                leastAssigned.added.add(t);
+                leastAssigned.current.add(t);
             }
         }
+    }
 
-        this.leaderState = new LeaderState(memberConfigs, connectorAssignments, taskAssignments);
+
+    private Map<String, ByteBuffer> performTaskAssignment(String leaderId, long maxOffset, Map<String, ConnectProtocol.WorkerState> memberConfigs) {
+        List<String> currentAllConnectors = sorted(configSnapshot.connectors());
+        Set<ConnectorTaskId> currAllTasksSet = new HashSet<>();
+        for (String connector : configSnapshot.connectors()) {
+            currAllTasksSet.addAll(configSnapshot.tasks(connector));
+        }
+        List<ConnectorTaskId> currentAllTasks = sorted(currAllTasksSet);
+
+        List<String> lastAllConnectors = new ArrayList<>();
+        List<ConnectorTaskId> lastAllTasks = new ArrayList<>();
+        for (ConnectProtocol.WorkerState ws : memberConfigs.values()) {
+            lastAllConnectors.addAll(ws.assignment().connectors());
+            lastAllTasks.addAll(ws.assignment().tasks());
+        }
+        Map<String, AssignStatus<String>> connectorsAssignStatus = new HashMap<>();
+        Map<String, AssignStatus<ConnectorTaskId>> tasksAssignStatus = new HashMap<>();
+        for (Map.Entry<String, ConnectProtocol.WorkerState> entry : memberConfigs.entrySet()) {
+            String memberId = entry.getKey();
+            ConnectProtocol.Assignment lastAssignment = entry.getValue().assignment();
+            connectorsAssignStatus.put(memberId, removeNonExists(lastAssignment.connectors(), currentAllConnectors));
+            tasksAssignStatus.put(memberId, removeNonExists(lastAssignment.tasks(), currentAllTasks));
+        }
+        // assign new added connectors and tasks
+        assignForNewConfig(currentAllConnectors, lastAllConnectors, connectorsAssignStatus.values());
+        assignForNewConfig(currentAllTasks, lastAllTasks, tasksAssignStatus.values());
+
+
+        Map<String, List<String>> assignConnectors = new HashMap<>();
+        Map<String, List<String>> addedConnectors = new HashMap<>();
+        Map<String, List<String>> revokedConnectors = new HashMap<>();
+        Map<String, List<ConnectorTaskId>> assignTasks = new HashMap<>();
+        Map<String, List<ConnectorTaskId>> addedTasks = new HashMap<>();
+        Map<String, List<ConnectorTaskId>> revokedTasks = new HashMap<>();
+
+        for (Map.Entry<String, AssignStatus<String>> entry : connectorsAssignStatus.entrySet()) {
+            assignConnectors.put(entry.getKey(), entry.getValue().current);
+            addedConnectors.put(entry.getKey(), entry.getValue().added);
+            revokedConnectors.put(entry.getKey(), entry.getValue().removed);
+        }
+
+        for (Map.Entry<String, AssignStatus<ConnectorTaskId>> entry : tasksAssignStatus.entrySet()) {
+            assignTasks.put(entry.getKey(), entry.getValue().current);
+            addedTasks.put(entry.getKey(), entry.getValue().added);
+            revokedTasks.put(entry.getKey(), entry.getValue().removed);
+        }
+
+        this.leaderState = new LeaderState(memberConfigs, assignConnectors, assignTasks);
 
         return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.NO_ERROR,
-                leaderId, memberConfigs.get(leaderId).url(), maxOffset, connectorAssignments, taskAssignments);
+                                           leaderId, memberConfigs.get(leaderId).url(), maxOffset,
+                                           addedConnectors,
+                                           addedTasks,
+                                           revokedConnectors,
+                                           revokedTasks);
     }
 
     private Map<String, ByteBuffer> fillAssignmentsAndSerialize(Collection<String> members,
@@ -254,17 +309,33 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                                                                 String leaderUrl,
                                                                 long maxOffset,
                                                                 Map<String, List<String>> connectorAssignments,
-                                                                Map<String, List<ConnectorTaskId>> taskAssignments) {
+                                                                Map<String, List<ConnectorTaskId>> taskAssignments,
+                                                                Map<String, List<String>> revokedConnectorAssignments,
+                                                                Map<String, List<ConnectorTaskId>> revokedTaskAssignments) {
 
         Map<String, ByteBuffer> groupAssignment = new HashMap<>();
         for (String member : members) {
             List<String> connectors = connectorAssignments.get(member);
+            List<String> revokedConnectors = revokedConnectorAssignments.get(member);
             if (connectors == null)
                 connectors = Collections.emptyList();
+            if (revokedConnectors == null)
+                revokedConnectors = Collections.emptyList();
             List<ConnectorTaskId> tasks = taskAssignments.get(member);
+            List<ConnectorTaskId> revokedTasks = revokedTaskAssignments.get(member);
             if (tasks == null)
                 tasks = Collections.emptyList();
-            ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(error, leaderId, leaderUrl, maxOffset, connectors, tasks);
+            if (revokedTasks == null)
+                tasks = Collections.emptyList();
+            ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(
+                    error,
+                    leaderId,
+                    leaderUrl,
+                    maxOffset,
+                    connectors,
+                    tasks,
+                    revokedConnectors,
+                    revokedTasks);
             log.debug("Assignment: {} -> {}", member, assignment);
             groupAssignment.put(member, ConnectProtocol.serializeAssignment(assignment));
         }
@@ -275,9 +346,9 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     @Override
     protected void onJoinPrepare(int generation, String memberId) {
         this.leaderState = null;
-        log.debug("Revoking previous assignment {}", assignmentSnapshot);
+/*        log.debug("Revoking previous assignment {}", assignmentSnapshot);
         if (assignmentSnapshot != null && !assignmentSnapshot.failed())
-            listener.onRevoked(assignmentSnapshot.leader(), assignmentSnapshot.connectors(), assignmentSnapshot.tasks());
+            listener.onRevoked(assignmentSnapshot.leader(), assignmentSnapshot.connectors(), assignmentSnapshot.tasks());*/
     }
 
     @Override
@@ -326,12 +397,14 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                 }
             };
 
-            metrics.addMetric(metrics.metricName("assigned-connectors",
-                              this.metricGrpName,
-                              "The number of connector instances currently assigned to this consumer"), numConnectors);
-            metrics.addMetric(metrics.metricName("assigned-tasks",
-                              this.metricGrpName,
-                              "The number of tasks currently assigned to this consumer"), numTasks);
+            metrics.addMetric(metrics.metricName(
+                    "assigned-connectors",
+                    this.metricGrpName,
+                    "The number of connector instances currently assigned to this consumer"), numConnectors);
+            metrics.addMetric(metrics.metricName(
+                    "assigned-tasks",
+                    this.metricGrpName,
+                    "The number of tasks currently assigned to this consumer"), numTasks);
         }
     }
 

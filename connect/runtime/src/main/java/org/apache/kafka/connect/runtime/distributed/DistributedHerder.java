@@ -842,11 +842,15 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
         log.info("Starting connectors and tasks using config offset {}", assignment.offset());
         List<Callable<Void>> callables = new ArrayList<>();
         for (String connectorName : assignment.connectors()) {
-            callables.add(getConnectorStartingCallable(connectorName));
+            if (!worker.connectorNames().contains(connectorName)) {
+                callables.add(getConnectorStartingCallable(connectorName));
+            }
         }
 
         for (ConnectorTaskId taskId : assignment.tasks()) {
-            callables.add(getTaskStartingCallable(taskId));
+            if (!worker.taskIds().contains(taskId)) {
+                callables.add(getTaskStartingCallable(taskId));
+            }
         }
         startAndStop(callables);
         log.info("Finished starting connectors and tasks");
@@ -893,6 +897,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
     // context and add to the worker. This needs to be called from within the main worker thread for this herder.
     private boolean startConnector(String connectorName) {
         log.info("Starting connector {}", connectorName);
+        log.info(this.getClass().getClassLoader().getResource(this.getClass().getCanonicalName().replace(".", "/") + ".class").toString());
         final Map<String, String> configProps = configState.connectorConfig(connectorName);
         final ConnectorContext ctx = new HerderConnectorContext(this, connectorName);
         final TargetState initialState = configState.targetState(connectorName);
@@ -1192,6 +1197,30 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // group membership actions (e.g., we may need to explicitly leave the group if we cannot handle the
             // assigned tasks).
             log.info("Joined group and got assignment: {}", assignment);
+            List<Callable<Void>> callables = new ArrayList<>();
+            for (final String connectorName : assignment.revokedConnectors()) {
+                callables.add(getConnectorStoppingCallable(connectorName));
+            }
+
+            // TODO: We need to at least commit task offsets, but if we could commit offsets & pause them instead of
+            // stopping them then state could continue to be reused when the task remains on this worker. For example,
+            // this would avoid having to close a connection and then reopen it when the task is assigned back to this
+            // worker again.
+            for (final ConnectorTaskId taskId : assignment.revokedTasks()) {
+                callables.add(getTaskStoppingCallable(taskId));
+            }
+
+            // The actual timeout for graceful task stop is applied in worker's stopAndAwaitTask method.
+            startAndStop(callables);
+            if (!callables.isEmpty()) {
+                member.requestRejoin();
+                statusBackingStore.flush();
+                log.info("Finished stopping tasks after rebalance");
+            }
+            // Ensure that all status updates have been pushed to the storage system before rebalancing.
+            // Otherwise, we may inadvertently overwrite the state with a stale value after the rebalance
+            // completes.
+
             synchronized (DistributedHerder.this) {
                 DistributedHerder.this.assignment = assignment;
                 DistributedHerder.this.generation = generation;
@@ -1244,6 +1273,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
                 // completes.
                 statusBackingStore.flush();
                 log.info("Finished stopping tasks in preparation for rebalance");
+                log.info("Rebalance Resolved without stopping");
             } else {
                 log.info("Wasn't unable to resume work after last rebalance, can skip stopping connectors and tasks");
             }
