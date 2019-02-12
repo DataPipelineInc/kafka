@@ -88,7 +88,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         this.log = logContext.logger(WorkerCoordinator.class);
         this.restUrl = restUrl;
         this.configStorage = configStorage;
-        this.assignmentSnapshot = null;
+        this.assignmentSnapshot = new ConnectProtocol.Assignment(new ArrayList<String>(), new ArrayList<ConnectorTaskId>());
         new WorkerCoordinatorMetrics(metrics, metricGrpPrefix);
         this.listener = listener;
         this.rejoinRequested = false;
@@ -154,13 +154,17 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
 
     @Override
     protected void onJoinComplete(int generation, String memberId, String protocol, ByteBuffer memberAssignment) {
-        assignmentSnapshot = ConnectProtocol.deserializeAssignment(memberAssignment);
+        ConnectProtocol.Assignment assignment = ConnectProtocol.deserializeAssignment(memberAssignment);
+        assignmentSnapshot.connectors().addAll(assignment.connectors());
+        assignmentSnapshot.tasks().addAll(assignment.tasks());
+        assignmentSnapshot.connectors().removeAll(assignment.revokedConnectors());
+        assignmentSnapshot.tasks().removeAll(assignment.revokedTasks());
         // At this point we always consider ourselves to be a member of the cluster, even if there was an assignment
         // error (the leader couldn't make the assignment) or we are behind the config and cannot yet work on our assigned
         // tasks. It's the responsibility of the code driving this process to decide how to react (e.g. trying to get
         // up to date, try to rejoin again, leaving the group and backing off, etc.).
         rejoinRequested = false;
-        listener.onAssigned(ConnectProtocol.deserializeAssignment(memberAssignment), generation);
+        listener.onAssigned(assignment, generation);
     }
 
     @Override
