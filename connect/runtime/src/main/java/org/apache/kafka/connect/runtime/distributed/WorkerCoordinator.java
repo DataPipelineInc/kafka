@@ -245,9 +245,9 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     }
 
     private <T> void assignForNewConfig(List<T> currentAll, List<T> lastAll, Collection<AssignStatus<T>> allMembers) {
+        AssignStatus<T> leastAssigned = allMembers.iterator().next();
         for (T t : currentAll) {
             if (!lastAll.contains(t)) {
-                AssignStatus<T> leastAssigned = allMembers.iterator().next();
                 for (AssignStatus<T> as : allMembers) {
                     if (as.current.size() < leastAssigned.current.size()) {
                         leastAssigned = as;

@@ -136,7 +136,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
     // Track enough information about the current membership state to be able to determine which requests via the API
     // and the from other nodes are safe to process
     private boolean rebalanceResolved;
-    private final ConnectProtocol.Assignment assignment = new ConnectProtocol.Assignment(new ArrayList<String>(), new ArrayList<ConnectorTaskId>());
+    private ConnectProtocol.Assignment assignment;
     private boolean canReadConfigs;
     private ClusterConfigState configState;
 
@@ -1246,10 +1246,14 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // completes.
 
             synchronized (DistributedHerder.this) {
-                DistributedHerder.this.assignment.connectors().addAll(assignment.connectors());
-                DistributedHerder.this.assignment.tasks().addAll(assignment.tasks());
-                DistributedHerder.this.assignment.connectors().removeAll(assignment.revokedConnectors());
-                DistributedHerder.this.assignment.tasks().removeAll(assignment.revokedTasks());
+                if (DistributedHerder.this.assignment != null) {
+                    assignment.connectors().addAll(DistributedHerder.this.assignment.connectors());
+                    assignment.tasks().addAll(DistributedHerder.this.assignment.tasks());
+                    assignment.connectors().removeAll(assignment.revokedConnectors());
+                    assignment.tasks().removeAll(assignment.revokedTasks());
+                }
+                log.info("Current assignment is {}",assignment);
+                DistributedHerder.this.assignment = assignment;
                 DistributedHerder.this.generation = generation;
                 rebalanceResolved = false;
                 herderMetrics.rebalanceStarted(time.milliseconds());
