@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.connect.runtime.distributed;
 
+import com.google.common.collect.Iterables;
 import org.apache.kafka.clients.consumer.internals.AbstractCoordinator;
 import org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient;
 import org.apache.kafka.common.metrics.Measurable;
@@ -32,14 +33,7 @@ import org.slf4j.Logger;
 
 import java.io.Closeable;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * This class manages the coordination process with the Kafka group coordinator on the broker for managing assignments
@@ -75,16 +69,16 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                              ConfigBackingStore configStorage,
                              WorkerRebalanceListener listener) {
         super(logContext,
-              client,
-              groupId,
-              rebalanceTimeoutMs,
-              sessionTimeoutMs,
-              heartbeatIntervalMs,
-              metrics,
-              metricGrpPrefix,
-              time,
-              retryBackoffMs,
-              true);
+                client,
+                groupId,
+                rebalanceTimeoutMs,
+                sessionTimeoutMs,
+                heartbeatIntervalMs,
+                metrics,
+                metricGrpPrefix,
+                time,
+                retryBackoffMs,
+                true);
         this.log = logContext.logger(WorkerCoordinator.class);
         this.restUrl = restUrl;
         this.configStorage = configStorage;
@@ -201,7 +195,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         }
 
         log.debug("Max config offset root: {}, local snapshot config offsets root: {}",
-                  maxOffset, configSnapshot.offset());
+                maxOffset, configSnapshot.offset());
         return maxOffset;
     }
 
@@ -226,37 +220,56 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     }
 
 
-    private class AssignStatus<T> {
-        List<T> added = new ArrayList<>();
-        List<T> removed = new ArrayList<>();
-        List<T> current = new ArrayList<>();
-    }
+    private class AssignmentResult<T> {
+        final Map<String, List<T>> revokedTs = new HashMap<>();
+        final Map<String, List<T>> addedTs = new HashMap<>();
+        final Map<String, List<T>> finalTs = new HashMap<>();
 
-    private <T> AssignStatus<T> removeNonExists(List<T> lastAll, List<T> currentAll) {
-        AssignStatus<T> assignStatus = new AssignStatus<>();
-        for (T t : lastAll) {
-            if (currentAll.contains(t)) {
-                assignStatus.current.add(t);
-            } else {
-                assignStatus.removed.add(t);
+        AssignmentResult(List<String> memberIds) {
+            for (String memberId : memberIds) {
+                revokedTs.put(memberId, new ArrayList<T>());
+                addedTs.put(memberId, new ArrayList<T>());
+                finalTs.put(memberId, new ArrayList<T>());
             }
         }
-        return assignStatus;
     }
 
-    private <T> void assignForNewConfig(List<T> currentAll, List<T> lastAll, Collection<AssignStatus<T>> allMembers) {
-        AssignStatus<T> leastAssigned = allMembers.iterator().next();
-        for (T t : currentAll) {
-            if (!lastAll.contains(t)) {
-                for (AssignStatus<T> as : allMembers) {
-                    if (as.current.size() < leastAssigned.current.size()) {
-                        leastAssigned = as;
-                    }
+    private <T> AssignmentResult<T> compute(List<String> memberIds, List<T> allTs, Map<String, List<T>> lastTsOfAll) {
+        Map<String, Integer> targetCounts = new HashMap<>();
+        for (String memberId : memberIds) {
+            targetCounts.put(memberId, 0);
+        }
+        for (int i = 0; i < allTs.size(); i++) {
+            String memberId = Iterables.get(memberIds, (i % memberIds.size()));
+            targetCounts.put(memberId, targetCounts.get(memberId) + 1);
+        }
+        Map<T, String> tOwners = invertAssignment(lastTsOfAll);
+        List<T> newTs = new ArrayList<>(allTs);
+        newTs.removeAll(tOwners.keySet());
+        AssignmentResult<T> result = new AssignmentResult<>(memberIds);
+        for (String id : memberIds) {
+            int targetCount = targetCounts.get(id);
+            int count = 0;
+            List<T> lastTs = lastTsOfAll.get(id);
+            for (T t : lastTs) {
+                if (allTs.contains(t) && count < targetCount) {
+                    result.finalTs.get(id).add(t);
+                    count++;
+                } else {
+                    result.revokedTs.get(id).add(t);
                 }
-                leastAssigned.added.add(t);
-                leastAssigned.current.add(t);
             }
+            for (T t : newTs) {
+                if (count < targetCount) {
+                    result.finalTs.get(id).add(t);
+                    count++;
+                    result.addedTs.get(id).add(t);
+                    newTs.remove(t);
+                }
+            }
+
         }
+        return result;
     }
 
 
@@ -268,52 +281,30 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         }
         List<ConnectorTaskId> currentAllTasks = sorted(currAllTasksSet);
 
-        List<String> lastAllConnectors = new ArrayList<>();
-        List<ConnectorTaskId> lastAllTasks = new ArrayList<>();
-        for (ConnectProtocol.WorkerState ws : memberConfigs.values()) {
-            lastAllConnectors.addAll(ws.assignment().connectors());
-            lastAllTasks.addAll(ws.assignment().tasks());
-        }
-        Map<String, AssignStatus<String>> connectorsAssignStatus = new HashMap<>();
-        Map<String, AssignStatus<ConnectorTaskId>> tasksAssignStatus = new HashMap<>();
+        Map<String, List<String>> lastConnectors = new HashMap<>();
+        Map<String, List<ConnectorTaskId>> lastTasks = new HashMap<>();
+
         for (Map.Entry<String, ConnectProtocol.WorkerState> entry : memberConfigs.entrySet()) {
             String memberId = entry.getKey();
             ConnectProtocol.Assignment lastAssignment = entry.getValue().assignment();
-            connectorsAssignStatus.put(memberId, removeNonExists(lastAssignment.connectors(), currentAllConnectors));
-            tasksAssignStatus.put(memberId, removeNonExists(lastAssignment.tasks(), currentAllTasks));
-        }
-        // assign new added connectors and tasks
-        assignForNewConfig(currentAllConnectors, lastAllConnectors, connectorsAssignStatus.values());
-        assignForNewConfig(currentAllTasks, lastAllTasks, tasksAssignStatus.values());
-
-
-        Map<String, List<String>> assignConnectors = new HashMap<>();
-        Map<String, List<String>> addedConnectors = new HashMap<>();
-        Map<String, List<String>> revokedConnectors = new HashMap<>();
-        Map<String, List<ConnectorTaskId>> assignTasks = new HashMap<>();
-        Map<String, List<ConnectorTaskId>> addedTasks = new HashMap<>();
-        Map<String, List<ConnectorTaskId>> revokedTasks = new HashMap<>();
-
-        for (Map.Entry<String, AssignStatus<String>> entry : connectorsAssignStatus.entrySet()) {
-            assignConnectors.put(entry.getKey(), entry.getValue().current);
-            addedConnectors.put(entry.getKey(), entry.getValue().added);
-            revokedConnectors.put(entry.getKey(), entry.getValue().removed);
+            lastConnectors.put(memberId, lastAssignment.connectors());
+            lastTasks.put(memberId, lastAssignment.tasks());
         }
 
-        for (Map.Entry<String, AssignStatus<ConnectorTaskId>> entry : tasksAssignStatus.entrySet()) {
-            assignTasks.put(entry.getKey(), entry.getValue().current);
-            addedTasks.put(entry.getKey(), entry.getValue().added);
-            revokedTasks.put(entry.getKey(), entry.getValue().removed);
-        }
+        List<String> memberIds = sorted(memberConfigs.keySet());
 
-        this.leaderState = new LeaderState(memberConfigs, assignConnectors, assignTasks);
+        AssignmentResult<String> connectorResult = compute(memberIds, currentAllConnectors, lastConnectors);
+        AssignmentResult<ConnectorTaskId> taskResult = compute(memberIds, currentAllTasks, lastTasks);
+
+
+        this.leaderState = new LeaderState(memberConfigs, connectorResult.finalTs, taskResult.finalTs);
 
         return fillAssignmentsAndSerialize(memberConfigs.keySet(), ConnectProtocol.Assignment.NO_ERROR,
-                                           leaderId, memberConfigs.get(leaderId).url(), maxOffset,
-                                           addedConnectors,
-                                           addedTasks,
-                                           revokedConnectors,
-                                           revokedTasks);
+                leaderId, memberConfigs.get(leaderId).url(), maxOffset,
+                connectorResult.addedTs,
+                taskResult.addedTs,
+                connectorResult.revokedTs,
+                taskResult.revokedTs);
     }
 
     private Map<String, ByteBuffer> fillAssignmentsAndSerialize(Collection<String> members,
