@@ -82,7 +82,7 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
         this.log = logContext.logger(WorkerCoordinator.class);
         this.restUrl = restUrl;
         this.configStorage = configStorage;
-        this.assignmentSnapshot = new ConnectProtocol.Assignment(new ArrayList<String>(), new ArrayList<ConnectorTaskId>());
+        this.assignmentSnapshot = null;
         new WorkerCoordinatorMetrics(metrics, metricGrpPrefix);
         this.listener = listener;
         this.rejoinRequested = false;
@@ -141,7 +141,10 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     @Override
     public List<ProtocolMetadata> metadata() {
         configSnapshot = configStorage.snapshot();
-        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl, configSnapshot.offset(), assignmentSnapshot);
+        ConnectProtocol.WorkerState workerState = new ConnectProtocol.WorkerState(restUrl,
+                configSnapshot.offset(),
+                assignmentSnapshot == null ?
+                        new ConnectProtocol.Assignment(new ArrayList<String>(), new ArrayList<ConnectorTaskId>()) : assignmentSnapshot);
         ByteBuffer metadata = ConnectProtocol.serializeMetadata(workerState);
         return Collections.singletonList(new ProtocolMetadata(DEFAULT_SUBPROTOCOL, metadata));
     }
@@ -149,6 +152,14 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
     @Override
     protected void onJoinComplete(int generation, String memberId, String protocol, ByteBuffer memberAssignment) {
         ConnectProtocol.Assignment assignment = ConnectProtocol.deserializeAssignment(memberAssignment);
+        assignmentSnapshot = new ConnectProtocol.Assignment(
+                assignment.error(),
+                assignment.leader(),
+                assignment.leaderUrl(),
+                assignment.offset(),
+                assignmentSnapshot == null ? new ArrayList<String>() : assignmentSnapshot.connectors(),
+                assignmentSnapshot == null ? new ArrayList<ConnectorTaskId>() :
+                        assignmentSnapshot.tasks());
         assignmentSnapshot.connectors().addAll(assignment.connectors());
         assignmentSnapshot.tasks().addAll(assignment.tasks());
         assignmentSnapshot.connectors().removeAll(assignment.revokedConnectors());
@@ -259,12 +270,14 @@ public final class WorkerCoordinator extends AbstractCoordinator implements Clos
                     result.revokedTs.get(id).add(t);
                 }
             }
-            for (T t : newTs) {
+
+            for (Iterator<T> it = newTs.iterator(); it.hasNext(); ) {
+                T t = it.next();
                 if (count < targetCount) {
                     result.finalTs.get(id).add(t);
                     count++;
                     result.addedTs.get(id).add(t);
-                    newTs.remove(t);
+                    it.remove();
                 }
             }
 
