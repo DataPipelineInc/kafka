@@ -136,6 +136,9 @@ public class WorkerConfig extends AbstractConfig {
             + "data to be committed in a future attempt.";
     public static final long OFFSET_COMMIT_TIMEOUT_MS_DEFAULT = 5000L;
 
+    public static final String INCREMENTAL_COOPERATIVE_REBALANCING_CONFIG = "incremental.cooperative.rebalancing";
+    public static final String INCREMENTAL_COOPERATIVE_REBALANCING_DOC = "whether to use incremental.cooperative.rebalancing";
+    public static final boolean INCREMENTAL_COOPERATIVE_REBALANCING_DEFAULT = false;
     /**
      * @deprecated As of 1.1.0.
      */
@@ -289,7 +292,10 @@ public class WorkerConfig extends AbstractConfig {
                         Collections.emptyList(),
                         Importance.LOW, CONFIG_PROVIDERS_DOC)
                 .define(REST_EXTENSION_CLASSES_CONFIG, Type.LIST, "",
-                        Importance.LOW, REST_EXTENSION_CLASSES_DOC);
+                        Importance.LOW, REST_EXTENSION_CLASSES_DOC)
+                .define(INCREMENTAL_COOPERATIVE_REBALANCING_CONFIG, Type.BOOLEAN,
+                        INCREMENTAL_COOPERATIVE_REBALANCING_DEFAULT, Importance.LOW,
+                        INCREMENTAL_COOPERATIVE_REBALANCING_DOC);
     }
 
     private void logInternalConverterDeprecationWarnings(Map<String, String> props) {
