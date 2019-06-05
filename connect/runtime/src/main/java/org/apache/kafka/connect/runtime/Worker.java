@@ -489,7 +489,7 @@ public class Worker {
             OffsetStorageWriter offsetWriter = new OffsetStorageWriter(offsetBackingStore, id.connector(),
                     internalKeyConverter, internalValueConverter);
             Map<String, Object> producerProps = producerConfigs(config);
-            if (config.getBoolean(WorkerConfig.TRANSACTIONAL_SOURCE_COMMIT)) {
+            if (connConfig.getBoolean(ConnectorConfig.TRANSACTIONAL_SOURCE_COMMIT)) {
                 producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, connConfig.originals().get("dptask.id"));
             }
             KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(producerProps);

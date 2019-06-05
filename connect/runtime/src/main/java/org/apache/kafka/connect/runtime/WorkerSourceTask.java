@@ -79,8 +79,6 @@ class WorkerSourceTask extends WorkerTask {
     private final Time time;
     private final SourceTaskMetricsGroup sourceTaskMetricsGroup;
     private boolean transactionalSourceCommit;
-    private boolean inTransaction;
-
     private List<SourceRecord> toSend;
     private boolean lastSendFailed; // Whether the last send failed *synchronously*, i.e. never made it into the producer's RecordAccumulator
     // Use IdentityHashMap to ensure correctness with duplicate records. This is a HashMap because
@@ -141,8 +139,7 @@ class WorkerSourceTask extends WorkerTask {
     public void initialize(TaskConfig taskConfig) {
         try {
             this.taskConfig = taskConfig.originalsStrings();
-            this.transactionalSourceCommit = workerConfig.getBoolean(WorkerConfig.TRANSACTIONAL_SOURCE_COMMIT);
-            this.taskConfig = taskConfig.originalsStrings();
+            this.transactionalSourceCommit = this.taskConfig.getOrDefault(ConnectorConfig.TRANSACTIONAL_SOURCE_COMMIT, "false").equalsIgnoreCase("true");
             if (transactionalSourceCommit) {
                 producer.initTransactions();
                 log.info("Init transaction for producer.");

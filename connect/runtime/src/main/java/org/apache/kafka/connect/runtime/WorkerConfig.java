@@ -201,9 +201,6 @@ public class WorkerConfig extends AbstractConfig {
             + "Examples: plugin.path=/usr/local/share/java,/usr/local/share/kafka/plugins,"
             + "/opt/connectors";
 
-    public static final String TRANSACTIONAL_SOURCE_COMMIT = "transactional.source.commit";
-    protected static final String TRANSACTIONAL_SOURCE_COMMIT_DOC = "source record offset commit is transactional.";
-
     public static final String CONFIG_PROVIDERS_CONFIG = "config.providers";
     protected static final String CONFIG_PROVIDERS_DOC =
             "Comma-separated names of <code>ConfigProvider</code> classes, loaded and used "
@@ -299,9 +296,6 @@ public class WorkerConfig extends AbstractConfig {
                 .define(INCREMENTAL_COOPERATIVE_REBALANCING_CONFIG, Type.BOOLEAN,
                         INCREMENTAL_COOPERATIVE_REBALANCING_DEFAULT, Importance.LOW,
                         INCREMENTAL_COOPERATIVE_REBALANCING_DOC)
-                .define(TRANSACTIONAL_SOURCE_COMMIT, Type.BOOLEAN,
-                        false, Importance.LOW,
-                        TRANSACTIONAL_SOURCE_COMMIT_DOC)
                 ;
     }
 
