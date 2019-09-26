@@ -36,6 +36,7 @@ import org.apache.kafka.connect.header.Header;
 import org.apache.kafka.connect.header.Headers;
 import org.apache.kafka.connect.runtime.ConnectMetrics.MetricGroup;
 import org.apache.kafka.connect.runtime.distributed.ClusterConfigState;
+import org.apache.kafka.connect.runtime.distributed.DistributedConfig;
 import org.apache.kafka.connect.runtime.errors.RetryWithToleranceOperator;
 import org.apache.kafka.connect.runtime.errors.Stage;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -81,7 +82,9 @@ class WorkerSourceTask extends WorkerTask {
     private final Time time;
     private final SourceTaskMetricsGroup sourceTaskMetricsGroup;
     private final AtomicReference<Exception> producerSendException;
-
+    private final boolean transactional;
+    private final String offsetTopic;
+    private boolean inTransaction;
     private List<SourceRecord> toSend;
     private boolean lastSendFailed; // Whether the last send failed *synchronously*, i.e. never made it into the producer's RecordAccumulator
     // Use IdentityHashMap to ensure correctness with duplicate records. This is a HashMap because
@@ -114,6 +117,30 @@ class WorkerSourceTask extends WorkerTask {
                             ClassLoader loader,
                             Time time,
                             RetryWithToleranceOperator retryWithToleranceOperator) {
+        this(id, task, statusListener, initialState, keyConverter, valueConverter, headerConverter, transformationChain, producer, offsetReader, offsetWriter, workerConfig, configState, connectMetrics,
+                loader,
+                time,
+                retryWithToleranceOperator, false);
+    }
+
+    public WorkerSourceTask(ConnectorTaskId id,
+                            SourceTask task,
+                            TaskStatus.Listener statusListener,
+                            TargetState initialState,
+                            Converter keyConverter,
+                            Converter valueConverter,
+                            HeaderConverter headerConverter,
+                            TransformationChain<SourceRecord> transformationChain,
+                            KafkaProducer<byte[], byte[]> producer,
+                            CloseableOffsetStorageReader offsetReader,
+                            OffsetStorageWriter offsetWriter,
+                            WorkerConfig workerConfig,
+                            ClusterConfigState configState,
+                            ConnectMetrics connectMetrics,
+                            ClassLoader loader,
+                            Time time,
+                            RetryWithToleranceOperator retryWithToleranceOperator,
+                            boolean transactional) {
 
         super(id, statusListener, initialState, loader, connectMetrics, retryWithToleranceOperator);
 
@@ -137,12 +164,17 @@ class WorkerSourceTask extends WorkerTask {
         this.stopRequestedLatch = new CountDownLatch(1);
         this.sourceTaskMetricsGroup = new SourceTaskMetricsGroup(id, connectMetrics);
         this.producerSendException = new AtomicReference<>();
+        this.transactional = transactional;
+        this.offsetTopic = workerConfig.getString(DistributedConfig.OFFSET_STORAGE_TOPIC_CONFIG) + "_tx";
     }
 
     @Override
     public void initialize(TaskConfig taskConfig) {
         try {
             this.taskConfig = taskConfig.originalsStrings();
+            if (transactional) {
+                producer.initTransactions();
+            }
         } catch (Throwable t) {
             log.error("{} Task failed initialization and will not be started.", this, t);
             onFailure(t);
@@ -225,7 +257,6 @@ class WorkerSourceTask extends WorkerTask {
                     }
                     continue;
                 }
-
                 maybeThrowProducerSendException();
 
                 if (toSend == null) {
@@ -236,6 +267,7 @@ class WorkerSourceTask extends WorkerTask {
                         recordPollReturned(toSend.size(), time.milliseconds() - start);
                     }
                 }
+
                 if (toSend == null)
                     continue;
                 log.debug("{} About to send " + toSend.size() + " records to Kafka", this);
@@ -256,8 +288,8 @@ class WorkerSourceTask extends WorkerTask {
     private void maybeThrowProducerSendException() {
         if (producerSendException.get() != null) {
             throw new ConnectException(
-                "Unrecoverable exception from producer send callback",
-                producerSendException.get()
+                    "Unrecoverable exception from producer send callback",
+                    producerSendException.get()
             );
         }
     }
@@ -303,6 +335,7 @@ class WorkerSourceTask extends WorkerTask {
     /**
      * Try to send a batch of records. If a send fails and is retriable, this saves the remainder of the batch so it can
      * be retried after backing off. If a send fails and is not retriable, this will throw a ConnectException.
+     *
      * @return true if all messages were sent, false if some need to be retried
      */
     private boolean sendRecords() {
@@ -332,10 +365,39 @@ class WorkerSourceTask extends WorkerTask {
                     if (!flushing) {
                         outstandingMessages.put(producerRecord, producerRecord);
                     } else {
-                        outstandingMessagesBacklog.put(producerRecord, producerRecord);
+                        if (transactional) {
+                            try {
+                                while (flushing && !isStopping()) {
+                                    long timeout = time.milliseconds() +
+                                            workerConfig.getLong(WorkerConfig.OFFSET_COMMIT_TIMEOUT_MS_CONFIG);
+
+                                    long timeoutMs = timeout - time.milliseconds();
+                                    if (timeoutMs <= 0) {
+                                        log.warn("{} Failed to commit offsets in time.", this);
+                                    } else {
+                                        this.wait(timeoutMs);
+                                    }
+                                }
+                                if (isStopping()) {
+                                    return true;
+                                }
+                                outstandingMessages.put(producerRecord, producerRecord);
+                            } catch (InterruptedException e) {
+                                log.warn("{} Interrupted when waiting flush offsets", this);
+                            }
+                        } else {
+                            outstandingMessagesBacklog.put(producerRecord, producerRecord);
+                        }
                     }
                     // Offsets are converted & serialized in the OffsetWriter
                     offsetWriter.offset(record.sourcePartition(), record.sourceOffset());
+                    if (transactional && !offsetWriter.isToFlushEmpty()) {
+                        throw new ConnectException("To flush shouldn't contain any data in transactional mode when sending reocrds");
+                    }
+                }
+                if (transactional && !inTransaction) {
+                    producer.beginTransaction();
+                    inTransaction = true;
                 }
             }
             try {
@@ -372,6 +434,7 @@ class WorkerSourceTask extends WorkerTask {
             }
             processed++;
         }
+
         toSend = null;
         return true;
     }
@@ -414,8 +477,7 @@ class WorkerSourceTask extends WorkerTask {
 
     public boolean commitOffsets() {
         long commitTimeoutMs = workerConfig.getLong(WorkerConfig.OFFSET_COMMIT_TIMEOUT_MS_CONFIG);
-
-        log.info("{} Committing offsets", this);
+        log.info("{} Committing {}offsets", this, transactional ? "transactional " : "");
 
         long started = time.milliseconds();
         long timeout = started + commitTimeoutMs;
@@ -432,8 +494,10 @@ class WorkerSourceTask extends WorkerTask {
             // to persistent storage
 
             // Next we need to wait for all outstanding messages to finish sending
-            log.info("{} flushing {} outstanding messages for offset commit", this, outstandingMessages.size());
-            while (!outstandingMessages.isEmpty()) {
+            log.info("{} flushing {} outstanding messages for offset commit {}", this, outstandingMessages.size()
+                    + (transactional ? outstandingMessagesBacklog.size() : 0), transactional ?
+                    String.format("including backlog %s messages", outstandingMessagesBacklog.size()) : "");
+            while (!outstandingMessages.isEmpty() || (transactional && !outstandingMessagesBacklog.isEmpty())) {
                 try {
                     long timeoutMs = timeout - time.milliseconds();
                     if (timeoutMs <= 0) {
@@ -462,16 +526,39 @@ class WorkerSourceTask extends WorkerTask {
                 finishSuccessfulFlush();
                 long durationMillis = time.milliseconds() - started;
                 recordCommitSuccess(durationMillis);
-                log.debug("{} Finished offset commitOffsets successfully in {} ms",
+                log.info("{} Finished offset commitOffsets successfully in {} ms",
                         this, durationMillis);
 
                 commitSourceTask();
                 return true;
             }
+//            if (transactional) {
+////                for (Map.Entry<ByteBuffer, ByteBuffer> entry : offsetWriter.getToFlush().entrySet()) {
+////                    ByteBuffer key = entry.getKey();
+////                    ByteBuffer value = entry.getValue();
+////                    producer.send(new ProducerRecord<>(offsetTopic, key == null ? null : key.array(), value == null ? null : value.array()));
+////                }
+//
+//                flushFuture = offsetWriter.doFlush(new org.apache.kafka.connect.util.Callback<Void>() {
+//                    @Override
+//                    public void onCompletion(Throwable error, Void result) {
+//                        if (error != null) {
+//                            log.error("{} Failed to flush offsets to storage: ", WorkerSourceTask.this, error);
+//                        } else {
+//                            log.trace("{} Finished flushing offsets to storage", WorkerSourceTask.this);
+//                        }
+//                    }
+//                });
+//                producer.commitTransaction();
+//                inTransaction = false;
+//                flushFuture = ConcurrentUtils.constantFuture(null);
+//                offsetWriter.handleFinishWrite();
+//                log.info("{} Finished flushing transactional offsets to storage", WorkerSourceTask.this);
+//            }
         }
 
         // Now we can actually flush the offsets to user storage.
-        Future<Void> flushFuture = offsetWriter.doFlush(new org.apache.kafka.connect.util.Callback<Void>() {
+        Future<Void> flushFuture = offsetWriter.doFlush(transactional ? producer : null, new org.apache.kafka.connect.util.Callback<Void>() {
             @Override
             public void onCompletion(Throwable error, Void result) {
                 if (error != null) {
@@ -510,7 +597,6 @@ class WorkerSourceTask extends WorkerTask {
             recordCommitFailure(time.milliseconds() - started, null);
             return false;
         }
-
         finishSuccessfulFlush();
         long durationMillis = time.milliseconds() - started;
         recordCommitSuccess(durationMillis);
@@ -531,10 +617,15 @@ class WorkerSourceTask extends WorkerTask {
     }
 
     private synchronized void finishFailedFlush() {
+        log.info("{} finish failed flush", this);
         offsetWriter.cancelFlush();
         outstandingMessages.putAll(outstandingMessagesBacklog);
         outstandingMessagesBacklog.clear();
         flushing = false;
+        if (transactional) {
+            // notify all waiting on flushing
+            this.notifyAll();
+        }
     }
 
     private synchronized void finishSuccessfulFlush() {
@@ -542,8 +633,19 @@ class WorkerSourceTask extends WorkerTask {
         IdentityHashMap<ProducerRecord<byte[], byte[]>, ProducerRecord<byte[], byte[]>> temp = outstandingMessages;
         outstandingMessages = outstandingMessagesBacklog;
         outstandingMessagesBacklog = temp;
+        if (transactional && inTransaction) {
+            log.info("{} Now commit transaction", this);
+            producer.commitTransaction();
+            inTransaction = false;
+            log.info("{} committed transaction", this);
+        }
         flushing = false;
+        if (transactional) {
+            // notify all waiting on flushing
+            this.notifyAll();
+        }
     }
+
 
     @Override
     public String toString() {
@@ -565,6 +667,7 @@ class WorkerSourceTask extends WorkerTask {
         private final int batchSize;
         private boolean completed = false;
         private int counter;
+
         public SourceRecordWriteCounter(int batchSize, SourceTaskMetricsGroup metricsGroup) {
             assert batchSize > 0;
             assert metricsGroup != null;
@@ -572,19 +675,23 @@ class WorkerSourceTask extends WorkerTask {
             counter = batchSize;
             this.metricsGroup = metricsGroup;
         }
+
         public void skipRecord() {
             if (counter > 0 && --counter == 0) {
                 finishedAllWrites();
             }
         }
+
         public void completeRecord() {
             if (counter > 0 && --counter == 0) {
                 finishedAllWrites();
             }
         }
+
         public void retryRemaining() {
             finishedAllWrites();
         }
+
         private void finishedAllWrites() {
             if (!completed) {
                 metricsGroup.recordWrite(batchSize - counter);
