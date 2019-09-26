@@ -219,7 +219,6 @@ public class WorkerConfig extends AbstractConfig {
         + "and `Principal`. ";
     public static final String CONNECTOR_CLIENT_POLICY_CLASS_DEFAULT = "None";
 
-
     public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
     public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
     public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;

@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.connect.storage;
 
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.util.Callback;
 import org.slf4j.Logger;
@@ -86,13 +87,19 @@ public class OffsetStorageWriter {
 
     /**
      * Set an offset for a partition using Connect data values
+     *
      * @param partition the partition to store an offset for
-     * @param offset the offset
+     * @param offset    the offset
      */
     @SuppressWarnings("unchecked")
     public synchronized void offset(Map<String, ?> partition, Map<String, ?> offset) {
         data.put((Map<String, Object>) partition, (Map<String, Object>) offset);
     }
+
+    public boolean isToFlushEmpty() {
+        return toFlush == null || toFlush.isEmpty();
+    }
+
 
     private boolean flushing() {
         return toFlush != null;
@@ -111,13 +118,19 @@ public class OffsetStorageWriter {
             throw new ConnectException("OffsetStorageWriter is already flushing");
         }
 
-        if (data.isEmpty())
+        if (data.isEmpty()) {
+            log.info("Nothing to flush.");
             return false;
+        }
 
         assert !flushing();
         toFlush = data;
         data = new HashMap<>();
         return true;
+    }
+
+    public Future<Void> doFlush(final Callback<Void> callback) {
+        return doFlush(null, callback);
     }
 
     /**
@@ -128,7 +141,7 @@ public class OffsetStorageWriter {
      *
      * @return a Future, or null if there are no offsets to commitOffsets
      */
-    public Future<Void> doFlush(final Callback<Void> callback) {
+    public Future<Void> doFlush(Producer<byte[], byte[]> producer, final Callback<Void> callback) {
 
         final long flushId;
         // Serialize
@@ -165,8 +178,7 @@ public class OffsetStorageWriter {
             // And submit the data
             log.debug("Submitting {} entries to backing store. The offsets are: {}", offsetsSerialized.size(), toFlush);
         }
-
-        return backingStore.set(offsetsSerialized, new Callback<Void>() {
+        return ((KafkaOffsetBackingStore) backingStore).set(producer, offsetsSerialized, new Callback<Void>() {
             @Override
             public void onCompletion(Throwable error, Void result) {
                 boolean isCurrent = handleFinishWrite(flushId, error, result);
@@ -192,6 +204,10 @@ public class OffsetStorageWriter {
             currentFlushId++;
             toFlush = null;
         }
+    }
+
+    public void handleFinishWrite() {
+        handleFinishWrite(currentFlushId, null, null);
     }
 
     /**
