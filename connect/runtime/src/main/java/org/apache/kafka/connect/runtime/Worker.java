@@ -511,8 +511,11 @@ public class Worker {
                     internalKeyConverter, internalValueConverter);
             Map<String, Object> producerProps = producerConfigs(id, "connector-producer-" + id, config, connConfig, connectorClass,
                                                                 connectorClientConfigOverridePolicy);
+            if (config.getBoolean(WorkerConfig.TRANSACTIONAL)) {
+                producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, String.format("%s-%s",connConfig.getString(ConnectorConfig.NAME_CONFIG), id));
+                producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+            }
             KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(producerProps);
-
             // Note we pass the configState as it performs dynamic transformations under the covers
             return new WorkerSourceTask(id, (SourceTask) task, statusListener, initialState, keyConverter, valueConverter,
                     headerConverter, transformationChain, producer, offsetReader, offsetWriter, config, configState, metrics, loader,

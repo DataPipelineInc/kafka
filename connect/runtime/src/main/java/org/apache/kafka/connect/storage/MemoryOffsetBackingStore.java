@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.connect.storage;
 
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.runtime.WorkerConfig;
 import org.apache.kafka.connect.util.Callback;
@@ -91,6 +92,11 @@ public class MemoryOffsetBackingStore implements OffsetBackingStore {
             }
         });
 
+    }
+
+    @Override
+    public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer, Callback<Void> callback) {
+        return set(values, callback);
     }
 
     @Override

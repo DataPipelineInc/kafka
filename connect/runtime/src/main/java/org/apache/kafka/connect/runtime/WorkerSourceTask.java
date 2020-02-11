@@ -21,6 +21,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.errors.InterruptException;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.metrics.stats.Avg;
@@ -39,15 +40,13 @@ import org.apache.kafka.connect.runtime.errors.RetryWithToleranceOperator;
 import org.apache.kafka.connect.runtime.errors.Stage;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
-import org.apache.kafka.connect.storage.Converter;
-import org.apache.kafka.connect.storage.HeaderConverter;
-import org.apache.kafka.connect.storage.OffsetStorageReader;
-import org.apache.kafka.connect.storage.OffsetStorageWriter;
+import org.apache.kafka.connect.storage.*;
 import org.apache.kafka.connect.util.ConnectUtils;
 import org.apache.kafka.connect.util.ConnectorTaskId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -80,7 +79,8 @@ class WorkerSourceTask extends WorkerTask {
     private final Time time;
     private final SourceTaskMetricsGroup sourceTaskMetricsGroup;
     private final AtomicReference<Exception> producerSendException;
-    private boolean transactionalSourceCommit;
+    private boolean transactional;
+    private boolean inTransaction;
 
     private List<SourceRecord> toSend;
     private boolean lastSendFailed; // Whether the last send failed *synchronously*, i.e. never made it into the producer's RecordAccumulator
@@ -143,17 +143,10 @@ class WorkerSourceTask extends WorkerTask {
     public void initialize(TaskConfig taskConfig) {
         try {
             this.taskConfig = taskConfig.originalsStrings();
-      this.transactionalSourceCommit =
-          this.taskConfig.containsKey(
-                  ConnectorConfig.CONNECTOR_TRANSACTIONAL_SOURCE_COMMIT_TRANSACTIONAL_ID_CONFIG)
-              && this.taskConfig
-                  .getOrDefault(
-                      ConnectorConfig.CONNECTOR_TRANSACTIONAL_SOURCE_COMMIT_ACKS_CONFIG, "1")
-                  .equalsIgnoreCase("all");
-            if (transactionalSourceCommit) {
+            this.transactional = workerConfig.getBoolean(WorkerConfig.TRANSACTIONAL);
+            if (transactional) {
                 producer.initTransactions();
-                log.info("Init transaction for producer.");
-                producer.beginTransaction();
+                offsetWriter.setTransactionalProducer(producer);
             }
         } catch (Throwable t) {
             log.error("{} Task failed initialization and will not be started.", this, t);
@@ -230,12 +223,12 @@ class WorkerSourceTask extends WorkerTask {
                     }
                     continue;
                 }
-                synchronized (this) {
-                    if (flushing && transactionalSourceCommit) {
-                        Thread.sleep(1000);
-                        continue;
-                    }
-                }
+//                synchronized (this) {
+//                    if (flushing && transactional) {
+//                        Thread.sleep(1000);
+//                        continue;
+//                    }
+//                }
                 maybeThrowProducerSendException();
 
                 if (toSend == null) {
@@ -346,6 +339,9 @@ class WorkerSourceTask extends WorkerTask {
                     // Offsets are converted & serialized in the OffsetWriter
                     offsetWriter.offset(record.sourcePartition(), record.sourceOffset());
                 }
+                if (transactional && !inTransaction) {
+                    inTransaction = true;
+                }
             }
             try {
                 final String topic = producerRecord.topic();
@@ -441,13 +437,38 @@ class WorkerSourceTask extends WorkerTask {
             // to persistent storage
 
             // Next we need to wait for all outstanding messages to finish sending
-            int messageSize = (transactionalSourceCommit ? outstandingMessagesBacklog.size() : 0) + outstandingMessages.size();
-            log.info("{} flushing {} outstanding messages for offset commit", this, messageSize);
-            while (!outstandingMessages.isEmpty() || (transactionalSourceCommit && !outstandingMessagesBacklog.isEmpty())) {
+            log.info("{} flushing {} outstanding messages for offset commit", this, outstandingMessages.size());
+            if (flushStarted && transactional && inTransaction) {
+                // Now we can actually flush the offsets to user storage.
+                Future<Void> flushFuture = offsetWriter.doFlush(new org.apache.kafka.connect.util.Callback<Void>() {
+                    @Override
+                    public void onCompletion(Throwable error, Void result) {
+                        if (error != null) {
+                            log.error("{} Failed to flush offsets to storage: ", WorkerSourceTask.this, error);
+                        } else {
+                            log.trace("{} Finished flushing offsets to storage", WorkerSourceTask.this);
+                        }
+                    }
+                });
+                try {
+                    producer.commitTransaction();
+                    inTransaction = false;
+                    finishSuccessfulFlush();
+                } catch (Exception e) {
+                    log.error("{} Flush of offsets failed", this);
+                    finishFailedFlush();
+                    recordCommitFailure(time.milliseconds() - started, e);
+                    return false;
+                }
+            }
+            if (transactional && !outstandingMessages.isEmpty()) {
+                throw new ConnectException("Something is wrong in transaction.");
+            }
+            while (!outstandingMessages.isEmpty()) {
                 try {
                     long timeoutMs = timeout - time.milliseconds();
                     if (timeoutMs <= 0) {
-                        log.error("{} Failed to flush, timed out while waiting for producer to flush outstanding {} messages", this, messageSize);
+                        log.error("{} Failed to flush, timed out while waiting for producer to flush outstanding {} messages", this, outstandingMessages.size());
                         finishFailedFlush();
                         recordCommitFailure(time.milliseconds() - started, null);
                         return false;
@@ -480,48 +501,49 @@ class WorkerSourceTask extends WorkerTask {
             }
         }
 
-        // Now we can actually flush the offsets to user storage.
-        Future<Void> flushFuture = offsetWriter.doFlush(new org.apache.kafka.connect.util.Callback<Void>() {
-            @Override
-            public void onCompletion(Throwable error, Void result) {
-                if (error != null) {
-                    log.error("{} Failed to flush offsets to storage: ", WorkerSourceTask.this, error);
-                } else {
-                    log.trace("{} Finished flushing offsets to storage", WorkerSourceTask.this);
+        if (!transactional) {
+            // Now we can actually flush the offsets to user storage.
+            Future<Void> flushFuture = offsetWriter.doFlush(new org.apache.kafka.connect.util.Callback<Void>() {
+                @Override
+                public void onCompletion(Throwable error, Void result) {
+                    if (error != null) {
+                        log.error("{} Failed to flush offsets to storage: ", WorkerSourceTask.this, error);
+                    } else {
+                        log.trace("{} Finished flushing offsets to storage", WorkerSourceTask.this);
+                    }
                 }
+            });
+            // Very rare case: offsets were unserializable and we finished immediately, unable to store
+            // any data
+            if (flushFuture == null) {
+                finishFailedFlush();
+                recordCommitFailure(time.milliseconds() - started, null);
+                return false;
             }
-        });
-        // Very rare case: offsets were unserializable and we finished immediately, unable to store
-        // any data
-        if (flushFuture == null) {
-            finishFailedFlush();
-            recordCommitFailure(time.milliseconds() - started, null);
-            return false;
+            try {
+                flushFuture.get(Math.max(timeout - time.milliseconds(), 0), TimeUnit.MILLISECONDS);
+                // There's a small race here where we can get the callback just as this times out (and log
+                // success), but then catch the exception below and cancel everything. This won't cause any
+                // errors, is only wasteful in this minor edge case, and the worst result is that the log
+                // could look a little confusing.
+            } catch (InterruptedException e) {
+                log.warn("{} Flush of offsets interrupted, cancelling", this);
+                finishFailedFlush();
+                recordCommitFailure(time.milliseconds() - started, e);
+                return false;
+            } catch (ExecutionException e) {
+                log.error("{} Flush of offsets threw an unexpected exception: ", this, e);
+                finishFailedFlush();
+                recordCommitFailure(time.milliseconds() - started, e);
+                return false;
+            } catch (TimeoutException e) {
+                log.error("{} Timed out waiting to flush offsets to storage", this);
+                finishFailedFlush();
+                recordCommitFailure(time.milliseconds() - started, null);
+                return false;
+            }
+            finishSuccessfulFlush();
         }
-        try {
-            flushFuture.get(Math.max(timeout - time.milliseconds(), 0), TimeUnit.MILLISECONDS);
-            // There's a small race here where we can get the callback just as this times out (and log
-            // success), but then catch the exception below and cancel everything. This won't cause any
-            // errors, is only wasteful in this minor edge case, and the worst result is that the log
-            // could look a little confusing.
-        } catch (InterruptedException e) {
-            log.warn("{} Flush of offsets interrupted, cancelling", this);
-            finishFailedFlush();
-            recordCommitFailure(time.milliseconds() - started, e);
-            return false;
-        } catch (ExecutionException e) {
-            log.error("{} Flush of offsets threw an unexpected exception: ", this, e);
-            finishFailedFlush();
-            recordCommitFailure(time.milliseconds() - started, e);
-            return false;
-        } catch (TimeoutException e) {
-            log.error("{} Timed out waiting to flush offsets to storage", this);
-            finishFailedFlush();
-            recordCommitFailure(time.milliseconds() - started, null);
-            return false;
-        }
-
-        finishSuccessfulFlush();
         long durationMillis = time.milliseconds() - started;
         recordCommitSuccess(durationMillis);
         log.info("{} Finished commitOffsets successfully in {} ms",
@@ -553,10 +575,6 @@ class WorkerSourceTask extends WorkerTask {
         outstandingMessages = outstandingMessagesBacklog;
         outstandingMessagesBacklog = temp;
         flushing = false;
-        if (transactionalSourceCommit) {
-            producer.commitTransaction();
-            producer.beginTransaction();
-        }
     }
 
     @Override

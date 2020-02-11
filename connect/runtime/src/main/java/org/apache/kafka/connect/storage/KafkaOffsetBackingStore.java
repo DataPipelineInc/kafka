@@ -19,9 +19,11 @@ package org.apache.kafka.connect.storage;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.requests.IsolationLevel;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.utils.Time;
@@ -37,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -66,7 +69,7 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
             throw new ConfigException("Offset storage topic must be specified");
 
         data = new HashMap<>();
-
+        boolean transactional = config.getBoolean(WorkerConfig.TRANSACTIONAL);
         Map<String, Object> originals = config.originals();
         Map<String, Object> producerProps = new HashMap<>(originals);
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
@@ -76,6 +79,9 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
         Map<String, Object> consumerProps = new HashMap<>(originals);
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
+        if (transactional) {
+            consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, IsolationLevel.READ_COMMITTED.toString().toLowerCase(Locale.ROOT));
+        }
 
         Map<String, Object> adminProps = new HashMap<>(originals);
         NewTopic topicDescription = TopicAdmin.defineTopic(topic).
@@ -139,12 +145,17 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
 
     @Override
     public Future<Void> set(final Map<ByteBuffer, ByteBuffer> values, final Callback<Void> callback) {
+        return set(values, null, callback);
+    }
+
+    @Override
+    public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer, Callback<Void> callback) {
         SetCallbackFuture producerCallback = new SetCallbackFuture(values.size(), callback);
 
         for (Map.Entry<ByteBuffer, ByteBuffer> entry : values.entrySet()) {
             ByteBuffer key = entry.getKey();
             ByteBuffer value = entry.getValue();
-            offsetLog.send(key == null ? null : key.array(), value == null ? null : value.array(), producerCallback);
+            offsetLog.send(producer, key == null ? null : key.array(), value == null ? null : value.array(), producerCallback);
         }
 
         return producerCallback;

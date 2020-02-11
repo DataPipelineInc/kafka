@@ -218,6 +218,7 @@ public class WorkerConfig extends AbstractConfig {
         + "overriden by the connector. The default implementation is `None`. The other possible policies in the framework include `All` "
         + "and `Principal`. ";
     public static final String CONNECTOR_CLIENT_POLICY_CLASS_DEFAULT = "None";
+    public static final String TRANSACTIONAL = "transactional";
 
 
     public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
@@ -299,7 +300,9 @@ public class WorkerConfig extends AbstractConfig {
                 .define(REST_EXTENSION_CLASSES_CONFIG, Type.LIST, "",
                         Importance.LOW, REST_EXTENSION_CLASSES_DOC)
                 .define(CONNECTOR_CLIENT_POLICY_CLASS_CONFIG, Type.STRING, CONNECTOR_CLIENT_POLICY_CLASS_DEFAULT,
-                        Importance.MEDIUM, CONNECTOR_CLIENT_POLICY_CLASS_DOC);
+                        Importance.MEDIUM, CONNECTOR_CLIENT_POLICY_CLASS_DOC)
+                .define(TRANSACTIONAL, Type.BOOLEAN, false,
+                        Importance.MEDIUM, "Transactional");
     }
 
     private void logInternalConverterDeprecationWarnings(Map<String, String> props) {

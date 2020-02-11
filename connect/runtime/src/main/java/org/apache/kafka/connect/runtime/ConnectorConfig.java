@@ -145,9 +145,6 @@ public class ConnectorConfig extends AbstractConfig {
     public static final String CONNECTOR_CLIENT_CONSUMER_OVERRIDES_PREFIX = "consumer.override.";
     public static final String CONNECTOR_CLIENT_ADMIN_OVERRIDES_PREFIX = "admin.override.";
 
-    public static final String CONNECTOR_TRANSACTIONAL_SOURCE_COMMIT_TRANSACTIONAL_ID_CONFIG = "producer.override.transactional.id";
-    public static final String CONNECTOR_TRANSACTIONAL_SOURCE_COMMIT_ACKS_CONFIG = "producer.override.acks";
-
     private final EnrichedConnectorConfig enrichedConfig;
     private static class EnrichedConnectorConfig extends AbstractConfig {
         EnrichedConnectorConfig(ConfigDef configDef, Map<String, String> props) {

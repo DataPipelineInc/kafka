@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.connect.storage;
 
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.connect.runtime.WorkerConfig;
 import org.apache.kafka.connect.util.Callback;
 
@@ -68,6 +69,9 @@ public interface OffsetBackingStore {
      */
     Future<Void> set(Map<ByteBuffer, ByteBuffer> values,
                             Callback<Void> callback);
+
+    Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer,
+                     Callback<Void> callback);
 
     /**
      * Configure class with the given key-value pairs

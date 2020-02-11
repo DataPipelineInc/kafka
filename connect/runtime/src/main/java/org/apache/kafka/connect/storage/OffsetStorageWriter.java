@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.connect.storage;
 
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.util.Callback;
 import org.slf4j.Logger;
@@ -165,8 +166,7 @@ public class OffsetStorageWriter {
             // And submit the data
             log.debug("Submitting {} entries to backing store. The offsets are: {}", offsetsSerialized.size(), toFlush);
         }
-
-        return backingStore.set(offsetsSerialized, new Callback<Void>() {
+        return backingStore.set(offsetsSerialized, txProducer, new Callback<Void>() {
             @Override
             public void onCompletion(Throwable error, Void result) {
                 boolean isCurrent = handleFinishWrite(flushId, error, result);
@@ -175,6 +175,12 @@ public class OffsetStorageWriter {
                 }
             }
         });
+    }
+
+    private Producer<byte[], byte[]> txProducer;
+
+    public void setTransactionalProducer(Producer<byte[], byte[]> txProducer) {
+        this.txProducer = txProducer;
     }
 
     /**
