@@ -79,7 +79,7 @@ class WorkerSourceTask extends WorkerTask {
     private final Time time;
     private final SourceTaskMetricsGroup sourceTaskMetricsGroup;
     private final AtomicReference<Exception> producerSendException;
-    private boolean transactional;
+    private final boolean transactional;
     private boolean inTransaction;
 
     private List<SourceRecord> toSend;
@@ -137,16 +137,15 @@ class WorkerSourceTask extends WorkerTask {
         this.stopRequestedLatch = new CountDownLatch(1);
         this.sourceTaskMetricsGroup = new SourceTaskMetricsGroup(id, connectMetrics);
         this.producerSendException = new AtomicReference<>();
+        this.transactional = offsetWriter.getTransactionalProducer() != null;
     }
 
     @Override
     public void initialize(TaskConfig taskConfig) {
         try {
             this.taskConfig = taskConfig.originalsStrings();
-            this.transactional = workerConfig.getBoolean(WorkerConfig.TRANSACTIONAL);
             if (transactional) {
                 producer.initTransactions();
-                offsetWriter.setTransactionalProducer(producer);
             }
         } catch (Throwable t) {
             log.error("{} Task failed initialization and will not be started.", this, t);

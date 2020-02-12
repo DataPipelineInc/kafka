@@ -166,7 +166,7 @@ public class OffsetStorageWriter {
             // And submit the data
             log.debug("Submitting {} entries to backing store. The offsets are: {}", offsetsSerialized.size(), toFlush);
         }
-        return backingStore.set(offsetsSerialized, txProducer, new Callback<Void>() {
+        return backingStore.set(offsetsSerialized, transactionalProducer, new Callback<Void>() {
             @Override
             public void onCompletion(Throwable error, Void result) {
                 boolean isCurrent = handleFinishWrite(flushId, error, result);
@@ -177,10 +177,14 @@ public class OffsetStorageWriter {
         });
     }
 
-    private Producer<byte[], byte[]> txProducer;
+    private Producer<byte[], byte[]> transactionalProducer;
 
     public void setTransactionalProducer(Producer<byte[], byte[]> txProducer) {
-        this.txProducer = txProducer;
+        this.transactionalProducer = txProducer;
+    }
+
+    public Producer<byte[], byte[]> getTransactionalProducer() {
+        return transactionalProducer;
     }
 
     /**
