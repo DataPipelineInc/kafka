@@ -300,9 +300,7 @@ public class WorkerConfig extends AbstractConfig {
                 .define(REST_EXTENSION_CLASSES_CONFIG, Type.LIST, "",
                         Importance.LOW, REST_EXTENSION_CLASSES_DOC)
                 .define(CONNECTOR_CLIENT_POLICY_CLASS_CONFIG, Type.STRING, CONNECTOR_CLIENT_POLICY_CLASS_DEFAULT,
-                        Importance.MEDIUM, CONNECTOR_CLIENT_POLICY_CLASS_DOC)
-                .define(TRANSACTIONAL, Type.BOOLEAN, false,
-                        Importance.MEDIUM, "Transactional");
+                        Importance.MEDIUM, CONNECTOR_CLIENT_POLICY_CLASS_DOC);
     }
 
     private void logInternalConverterDeprecationWarnings(Map<String, String> props) {

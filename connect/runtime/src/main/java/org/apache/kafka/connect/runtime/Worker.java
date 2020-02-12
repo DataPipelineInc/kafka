@@ -26,6 +26,7 @@ import org.apache.kafka.common.config.provider.ConfigProvider;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.metrics.stats.Frequencies;
 import org.apache.kafka.common.metrics.stats.Total;
+import org.apache.kafka.common.requests.IsolationLevel;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.connector.Connector;
@@ -61,13 +62,7 @@ import org.apache.kafka.connect.util.SinkUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
@@ -511,7 +506,7 @@ public class Worker {
                     internalKeyConverter, internalValueConverter);
             Map<String, Object> producerProps = producerConfigs(id, "connector-producer-" + id, config, connConfig, connectorClass,
                                                                 connectorClientConfigOverridePolicy);
-            if (config.getBoolean(WorkerConfig.TRANSACTIONAL)) {
+            if (connConfig.getBoolean(WorkerConfig.TRANSACTIONAL)) {
                 producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, String.format("%s-%s",connConfig.getString(ConnectorConfig.NAME_CONFIG), id));
                 producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
             }
@@ -527,6 +522,9 @@ public class Worker {
             retryWithToleranceOperator.reporters(sinkTaskReporters(id, sinkConfig, errorHandlingMetrics, connectorClass));
 
             Map<String, Object> consumerProps = consumerConfigs(id, config, connConfig, connectorClass, connectorClientConfigOverridePolicy);
+            if (connConfig.getBoolean(WorkerConfig.TRANSACTIONAL)) {
+                consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, IsolationLevel.READ_COMMITTED.toString().toLowerCase(Locale.ROOT));
+            }
             KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(consumerProps);
 
             return new WorkerSinkTask(id, (SinkTask) task, statusListener, initialState, config, configState, metrics, keyConverter,
