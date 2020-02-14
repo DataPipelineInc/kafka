@@ -218,8 +218,6 @@ public class WorkerConfig extends AbstractConfig {
         + "overriden by the connector. The default implementation is `None`. The other possible policies in the framework include `All` "
         + "and `Principal`. ";
     public static final String CONNECTOR_CLIENT_POLICY_CLASS_DEFAULT = "None";
-    public static final String TRANSACTIONAL = "transactional";
-
 
     public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
     public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;

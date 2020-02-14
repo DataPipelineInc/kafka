@@ -509,16 +509,13 @@ public class Worker {
             if (connConfig.getBoolean(ConnectorConfig.TRANSACTIONAL)) {
                 producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, String.format("%s-%s",connConfig.getString(ConnectorConfig.NAME_CONFIG), id));
                 producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+                producerProps.put(ProducerConfig.ACKS_CONFIG, "all");
             }
             KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(producerProps);
-            if (connConfig.getBoolean(ConnectorConfig.TRANSACTIONAL)) {
-                offsetWriter.setTransactionalProducer(producer);
-            }
             // Note we pass the configState as it performs dynamic transformations under the covers
             return new WorkerSourceTask(id, (SourceTask) task, statusListener, initialState, keyConverter, valueConverter,
                     headerConverter, transformationChain, producer, offsetReader, offsetWriter, config, configState, metrics, loader,
-                    time, retryWithToleranceOperator);
-
+                    time, retryWithToleranceOperator, connConfig.getBoolean(ConnectorConfig.TRANSACTIONAL));
         } else if (task instanceof SinkTask) {
             TransformationChain<SinkRecord> transformationChain = new TransformationChain<>(connConfig.<SinkRecord>transformations(), retryWithToleranceOperator);
             log.info("Initializing: {}", transformationChain);

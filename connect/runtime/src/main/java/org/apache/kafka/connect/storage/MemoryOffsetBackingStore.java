@@ -95,11 +95,6 @@ public class MemoryOffsetBackingStore implements OffsetBackingStore {
     }
 
     @Override
-    public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer, Callback<Void> callback) {
-        return set(values, callback);
-    }
-
-    @Override
     public Future<Void> set(final Map<ByteBuffer, ByteBuffer> values,
                             final Callback<Void> callback) {
         return executor.submit(new Callable<Void>() {

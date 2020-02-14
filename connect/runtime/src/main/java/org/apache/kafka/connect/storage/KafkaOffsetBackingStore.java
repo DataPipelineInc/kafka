@@ -21,12 +21,14 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.requests.IsolationLevel;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.connect.runtime.ConnectorConfig;
 import org.apache.kafka.connect.runtime.WorkerConfig;
 import org.apache.kafka.connect.runtime.distributed.DistributedConfig;
 import org.apache.kafka.connect.util.Callback;
@@ -60,6 +62,7 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     private static final Logger log = LoggerFactory.getLogger(KafkaOffsetBackingStore.class);
 
     private KafkaBasedLog<byte[], byte[]> offsetLog;
+    private KafkaBasedLog<byte[], byte[]> offsetLogTx;
     private HashMap<ByteBuffer, ByteBuffer> data;
 
     @Override
@@ -69,7 +72,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
             throw new ConfigException("Offset storage topic must be specified");
 
         data = new HashMap<>();
-        boolean transactional = config.getBoolean(WorkerConfig.TRANSACTIONAL);
         Map<String, Object> originals = config.originals();
         Map<String, Object> producerProps = new HashMap<>(originals);
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
@@ -79,9 +81,8 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
         Map<String, Object> consumerProps = new HashMap<>(originals);
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
-        if (transactional) {
-            consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, IsolationLevel.READ_COMMITTED.toString().toLowerCase(Locale.ROOT));
-        }
+
+        consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, IsolationLevel.READ_COMMITTED.toString().toLowerCase(Locale.ROOT));
 
         Map<String, Object> adminProps = new HashMap<>(originals);
         NewTopic topicDescription = TopicAdmin.defineTopic(topic).
@@ -89,8 +90,14 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
                 partitions(config.getInt(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG)).
                 replicationFactor(config.getShort(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG)).
                 build();
+        NewTopic topicDescriptionTx = TopicAdmin.defineTopic(topic + "_tx").
+                compacted().
+                partitions(config.getInt(DistributedConfig.OFFSET_STORAGE_PARTITIONS_CONFIG)).
+                replicationFactor(config.getShort(DistributedConfig.OFFSET_STORAGE_REPLICATION_FACTOR_CONFIG)).
+                build();
 
         offsetLog = createKafkaBasedLog(topic, producerProps, consumerProps, consumedCallback, topicDescription, adminProps);
+        offsetLogTx = createKafkaBasedLog(topic + "_tx", producerProps, consumerProps, consumedCallbackTx, topicDescriptionTx, adminProps);
     }
 
     private KafkaBasedLog<byte[], byte[]> createKafkaBasedLog(String topic, Map<String, Object> producerProps,
@@ -113,6 +120,7 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     public void start() {
         log.info("Starting KafkaOffsetBackingStore");
         offsetLog.start();
+        offsetLogTx.start();
         log.info("Finished reading offsets topic and starting KafkaOffsetBackingStore");
     }
 
@@ -120,6 +128,7 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     public void stop() {
         log.info("Stopping KafkaOffsetBackingStore");
         offsetLog.stop();
+        offsetLogTx.stop();
         log.info("Stopped KafkaOffsetBackingStore");
     }
 
@@ -144,24 +153,38 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     }
 
     @Override
-    public Future<Void> set(final Map<ByteBuffer, ByteBuffer> values, final Callback<Void> callback) {
-        return set(values, null, callback);
-    }
-
-    @Override
-    public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer, Callback<Void> callback) {
+    public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Callback<Void> callback) {
         SetCallbackFuture producerCallback = new SetCallbackFuture(values.size(), callback);
 
         for (Map.Entry<ByteBuffer, ByteBuffer> entry : values.entrySet()) {
             ByteBuffer key = entry.getKey();
             ByteBuffer value = entry.getValue();
-            offsetLog.send(producer, key == null ? null : key.array(), value == null ? null : value.array(), producerCallback);
+            offsetLog.send(key == null ? null : key.array(), value == null ? null : value.array(), producerCallback);
         }
 
         return producerCallback;
     }
 
+    public Future<Void> xSet(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer, Callback<Void> callback) {
+        SetCallbackFuture producerCallback = new SetCallbackFuture(values.size(), callback);
+        for (Map.Entry<ByteBuffer, ByteBuffer> entry : values.entrySet()) {
+            ByteBuffer key = entry.getKey();
+            ByteBuffer value = entry.getValue();
+            producer.send(new ProducerRecord<>(offsetLogTx.getTopic(), key == null ? null : key.array(), value == null ? null : value.array()), producerCallback);
+        }
+        return producerCallback;
+    }
+
     private final Callback<ConsumerRecord<byte[], byte[]>> consumedCallback = new Callback<ConsumerRecord<byte[], byte[]>>() {
+        @Override
+        public void onCompletion(Throwable error, ConsumerRecord<byte[], byte[]> record) {
+            ByteBuffer key = record.key() != null ? ByteBuffer.wrap(record.key()) : null;
+            ByteBuffer value = record.value() != null ? ByteBuffer.wrap(record.value()) : null;
+            data.put(key, value);
+        }
+    };
+
+    private final Callback<ConsumerRecord<byte[], byte[]>> consumedCallbackTx = new Callback<ConsumerRecord<byte[], byte[]>>() {
         @Override
         public void onCompletion(Throwable error, ConsumerRecord<byte[], byte[]> record) {
             ByteBuffer key = record.key() != null ? ByteBuffer.wrap(record.key()) : null;

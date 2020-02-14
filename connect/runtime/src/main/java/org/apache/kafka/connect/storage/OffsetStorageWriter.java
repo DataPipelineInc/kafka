@@ -87,13 +87,19 @@ public class OffsetStorageWriter {
 
     /**
      * Set an offset for a partition using Connect data values
+     *
      * @param partition the partition to store an offset for
-     * @param offset the offset
+     * @param offset    the offset
      */
     @SuppressWarnings("unchecked")
     public synchronized void offset(Map<String, ?> partition, Map<String, ?> offset) {
         data.put((Map<String, Object>) partition, (Map<String, Object>) offset);
     }
+
+    public boolean isToFlushEmpty() {
+        return toFlush == null || toFlush.isEmpty();
+    }
+
 
     private boolean flushing() {
         return toFlush != null;
@@ -112,13 +118,35 @@ public class OffsetStorageWriter {
             throw new ConnectException("OffsetStorageWriter is already flushing");
         }
 
-        if (data.isEmpty())
+        if (data.isEmpty()) {
+            log.info("Nothing to flush.");
             return false;
+        }
 
         assert !flushing();
         toFlush = data;
         data = new HashMap<>();
         return true;
+    }
+
+
+    public Map<ByteBuffer, ByteBuffer> getToFlush() {
+        final Map<ByteBuffer, ByteBuffer> offsetsSerialized;
+        offsetsSerialized = new HashMap<>(toFlush.size());
+        for (Map.Entry<Map<String, Object>, Map<String, Object>> entry : toFlush.entrySet()) {
+            // When serializing the key, we add in the namespace information so the key is [namespace, real key]
+            byte[] key = keyConverter.fromConnectData(namespace, null, Arrays.asList(namespace, entry.getKey()));
+            ByteBuffer keyBuffer = (key != null) ? ByteBuffer.wrap(key) : null;
+            byte[] value = valueConverter.fromConnectData(namespace, null, entry.getValue());
+            ByteBuffer valueBuffer = (value != null) ? ByteBuffer.wrap(value) : null;
+
+            offsetsSerialized.put(keyBuffer, valueBuffer);
+        }
+        return offsetsSerialized;
+    }
+
+    public Future<Void> doFlush(final Callback<Void> callback) {
+        return doFlush(null, callback);
     }
 
     /**
@@ -129,7 +157,7 @@ public class OffsetStorageWriter {
      *
      * @return a Future, or null if there are no offsets to commitOffsets
      */
-    public Future<Void> doFlush(final Callback<Void> callback) {
+    public Future<Void> doFlush(Producer<byte[], byte[]> producer, final Callback<Void> callback) {
 
         final long flushId;
         // Serialize
@@ -166,25 +194,27 @@ public class OffsetStorageWriter {
             // And submit the data
             log.debug("Submitting {} entries to backing store. The offsets are: {}", offsetsSerialized.size(), toFlush);
         }
-        return backingStore.set(offsetsSerialized, transactionalProducer, new Callback<Void>() {
-            @Override
-            public void onCompletion(Throwable error, Void result) {
-                boolean isCurrent = handleFinishWrite(flushId, error, result);
-                if (isCurrent && callback != null) {
-                    callback.onCompletion(error, result);
+        if (producer != null) {
+            return ((KafkaOffsetBackingStore) backingStore).xSet(offsetsSerialized, producer, new Callback<Void>() {
+                @Override
+                public void onCompletion(Throwable error, Void result) {
+                    boolean isCurrent = handleFinishWrite(flushId, error, result);
+                    if (isCurrent && callback != null) {
+                        callback.onCompletion(error, result);
+                    }
                 }
-            }
-        });
-    }
-
-    private Producer<byte[], byte[]> transactionalProducer;
-
-    public void setTransactionalProducer(Producer<byte[], byte[]> txProducer) {
-        this.transactionalProducer = txProducer;
-    }
-
-    public Producer<byte[], byte[]> getTransactionalProducer() {
-        return transactionalProducer;
+            });
+        } else {
+            return backingStore.set(offsetsSerialized, new Callback<Void>() {
+                @Override
+                public void onCompletion(Throwable error, Void result) {
+                    boolean isCurrent = handleFinishWrite(flushId, error, result);
+                    if (isCurrent && callback != null) {
+                        callback.onCompletion(error, result);
+                    }
+                }
+            });
+        }
     }
 
     /**
@@ -202,6 +232,10 @@ public class OffsetStorageWriter {
             currentFlushId++;
             toFlush = null;
         }
+    }
+
+    public void handleFinishWrite() {
+        handleFinishWrite(currentFlushId, null, null);
     }
 
     /**
