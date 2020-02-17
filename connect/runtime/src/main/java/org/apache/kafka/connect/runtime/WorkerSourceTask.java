@@ -385,29 +385,27 @@ class WorkerSourceTask extends WorkerTask {
             }
             try {
                 final String topic = producerRecord.topic();
-                synchronized (this) {
-                    producer.send(
-                            producerRecord,
-                            new Callback() {
-                                @Override
-                                public void onCompletion(RecordMetadata recordMetadata, Exception e) {
-                                    if (e != null) {
-                                        log.error("{} failed to send record to {}:", WorkerSourceTask.this, topic, e);
-                                        log.debug("{} Failed record: {}", WorkerSourceTask.this, preTransformRecord);
-                                        producerSendException.compareAndSet(null, e);
-                                    } else {
-                                        recordSent(producerRecord);
-                                        counter.completeRecord();
-                                        log.trace("{} Wrote record successfully: topic {} partition {} offset {}",
-                                                WorkerSourceTask.this,
-                                                recordMetadata.topic(), recordMetadata.partition(),
-                                                recordMetadata.offset());
-                                        commitTaskRecord(preTransformRecord);
-                                    }
+                producer.send(
+                        producerRecord,
+                        new Callback() {
+                            @Override
+                            public void onCompletion(RecordMetadata recordMetadata, Exception e) {
+                                if (e != null) {
+                                    log.error("{} failed to send record to {}:", WorkerSourceTask.this, topic, e);
+                                    log.debug("{} Failed record: {}", WorkerSourceTask.this, preTransformRecord);
+                                    producerSendException.compareAndSet(null, e);
+                                } else {
+                                    recordSent(producerRecord);
+                                    counter.completeRecord();
+                                    log.trace("{} Wrote record successfully: topic {} partition {} offset {}",
+                                            WorkerSourceTask.this,
+                                            recordMetadata.topic(), recordMetadata.partition(),
+                                            recordMetadata.offset());
+                                    commitTaskRecord(preTransformRecord);
                                 }
-                            });
-                    lastSendFailed = false;
-                }
+                            }
+                        });
+                lastSendFailed = false;
             } catch (org.apache.kafka.common.errors.RetriableException e) {
                 log.warn("{} Failed to send {}, backing off before retrying:", this, producerRecord, e);
                 toSend = toSend.subList(processed, toSend.size());
@@ -543,7 +541,7 @@ class WorkerSourceTask extends WorkerTask {
         }
 
         // Now we can actually flush the offsets to user storage.
-        Future<Void> flushFuture = offsetWriter.doFlush(transactional? producer:null, new org.apache.kafka.connect.util.Callback<Void>() {
+        Future<Void> flushFuture = offsetWriter.doFlush(transactional ? producer : null, new org.apache.kafka.connect.util.Callback<Void>() {
             @Override
             public void onCompletion(Throwable error, Void result) {
                 if (error != null) {

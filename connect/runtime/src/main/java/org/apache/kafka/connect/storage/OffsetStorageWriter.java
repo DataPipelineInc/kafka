@@ -129,22 +129,6 @@ public class OffsetStorageWriter {
         return true;
     }
 
-
-    public Map<ByteBuffer, ByteBuffer> getToFlush() {
-        final Map<ByteBuffer, ByteBuffer> offsetsSerialized;
-        offsetsSerialized = new HashMap<>(toFlush.size());
-        for (Map.Entry<Map<String, Object>, Map<String, Object>> entry : toFlush.entrySet()) {
-            // When serializing the key, we add in the namespace information so the key is [namespace, real key]
-            byte[] key = keyConverter.fromConnectData(namespace, null, Arrays.asList(namespace, entry.getKey()));
-            ByteBuffer keyBuffer = (key != null) ? ByteBuffer.wrap(key) : null;
-            byte[] value = valueConverter.fromConnectData(namespace, null, entry.getValue());
-            ByteBuffer valueBuffer = (value != null) ? ByteBuffer.wrap(value) : null;
-
-            offsetsSerialized.put(keyBuffer, valueBuffer);
-        }
-        return offsetsSerialized;
-    }
-
     public Future<Void> doFlush(final Callback<Void> callback) {
         return doFlush(null, callback);
     }

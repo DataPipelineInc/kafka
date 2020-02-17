@@ -243,6 +243,7 @@ public class KafkaBasedLog<K, V> {
     }
 
     public void send(Producer<K, V> producer, K key, V value, org.apache.kafka.clients.producer.Callback callback) {
+        producer = producer == null ? this.producer : producer;
         producer.send(new ProducerRecord<>(topic, key, value), callback);
     }
 
