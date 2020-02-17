@@ -242,6 +242,10 @@ public class KafkaBasedLog<K, V> {
         producer.send(new ProducerRecord<>(topic, key, value), callback);
     }
 
+    public void send(Producer<K, V> producer, K key, V value, org.apache.kafka.clients.producer.Callback callback) {
+        producer.send(new ProducerRecord<>(topic, key, value), callback);
+    }
+
     private Producer<K, V> createProducer() {
         // Always require producer acks to all to ensure durable writes
         producerConfigs.put(ProducerConfig.ACKS_CONFIG, "all");

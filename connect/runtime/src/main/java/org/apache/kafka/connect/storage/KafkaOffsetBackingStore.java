@@ -62,7 +62,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     private static final Logger log = LoggerFactory.getLogger(KafkaOffsetBackingStore.class);
 
     private KafkaBasedLog<byte[], byte[]> offsetLog;
-    private KafkaBasedLog<byte[], byte[]> offsetLogTx;
     private HashMap<ByteBuffer, ByteBuffer> data;
 
     @Override
@@ -97,7 +96,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
                 build();
 
         offsetLog = createKafkaBasedLog(topic, producerProps, consumerProps, consumedCallback, topicDescription, adminProps);
-        offsetLogTx = createKafkaBasedLog(topic + "_tx", producerProps, consumerProps, consumedCallbackTx, topicDescriptionTx, adminProps);
     }
 
     private KafkaBasedLog<byte[], byte[]> createKafkaBasedLog(String topic, Map<String, Object> producerProps,
@@ -120,7 +118,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     public void start() {
         log.info("Starting KafkaOffsetBackingStore");
         offsetLog.start();
-        offsetLogTx.start();
         log.info("Finished reading offsets topic and starting KafkaOffsetBackingStore");
     }
 
@@ -128,7 +125,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
     public void stop() {
         log.info("Stopping KafkaOffsetBackingStore");
         offsetLog.stop();
-        offsetLogTx.stop();
         log.info("Stopped KafkaOffsetBackingStore");
     }
 
@@ -152,25 +148,6 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
         return future;
     }
 
-    public Future<Map<ByteBuffer, ByteBuffer>> xget(final Collection<ByteBuffer> keys,
-                                                   final Callback<Map<ByteBuffer, ByteBuffer>> callback) {
-        ConvertingFutureCallback<Void, Map<ByteBuffer, ByteBuffer>> future = new ConvertingFutureCallback<Void, Map<ByteBuffer, ByteBuffer>>(callback) {
-            @Override
-            public Map<ByteBuffer, ByteBuffer> convert(Void result) {
-                Map<ByteBuffer, ByteBuffer> values = new HashMap<>();
-                for (ByteBuffer key : keys)
-                    values.put(key, data.get(key));
-                return values;
-            }
-        };
-        // This operation may be relatively (but not too) expensive since it always requires checking end offsets, even
-        // if we've already read up to the end. However, it also should not be common (offsets should only be read when
-        // resetting a task). Always requiring that we read to the end is simpler than trying to differentiate when it
-        // is safe not to (which should only be if we *know* we've maintained ownership since the last write).
-        offsetLogTx.readToEnd(future);
-        return future;
-    }
-
     @Override
     public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Callback<Void> callback) {
         SetCallbackFuture producerCallback = new SetCallbackFuture(values.size(), callback);
@@ -180,16 +157,15 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
             ByteBuffer value = entry.getValue();
             offsetLog.send(key == null ? null : key.array(), value == null ? null : value.array(), producerCallback);
         }
-
         return producerCallback;
     }
 
-    public Future<Void> xSet(Map<ByteBuffer, ByteBuffer> values, Producer<byte[], byte[]> producer, Callback<Void> callback) {
+    public Future<Void> set(Producer<byte[], byte[]> producer, Map<ByteBuffer, ByteBuffer> values, Callback<Void> callback) {
         SetCallbackFuture producerCallback = new SetCallbackFuture(values.size(), callback);
         for (Map.Entry<ByteBuffer, ByteBuffer> entry : values.entrySet()) {
             ByteBuffer key = entry.getKey();
             ByteBuffer value = entry.getValue();
-            producer.send(new ProducerRecord<>(offsetLogTx.getTopic(), key == null ? null : key.array(), value == null ? null : value.array()), producerCallback);
+            offsetLog.send(producer, key == null ? null : key.array(), value == null ? null : value.array(), producerCallback);
         }
         return producerCallback;
     }

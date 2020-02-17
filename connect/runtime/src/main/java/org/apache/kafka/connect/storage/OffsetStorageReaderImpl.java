@@ -22,11 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Implementation of OffsetStorageReader. Unlike OffsetStorageWriter which is implemented
@@ -40,20 +36,13 @@ public class OffsetStorageReaderImpl implements OffsetStorageReader {
     private final String namespace;
     private final Converter keyConverter;
     private final Converter valueConverter;
-    private final boolean transactional;
 
     public OffsetStorageReaderImpl(OffsetBackingStore backingStore, String namespace,
-                                   Converter keyConverter, Converter valueConverter, boolean transactional) {
+                                   Converter keyConverter, Converter valueConverter) {
         this.backingStore = backingStore;
         this.namespace = namespace;
         this.keyConverter = keyConverter;
         this.valueConverter = valueConverter;
-        this.transactional = transactional;
-    }
-
-    public OffsetStorageReaderImpl(OffsetBackingStore backingStore, String namespace,
-                                   Converter keyConverter, Converter valueConverter) {
-        this(backingStore, namespace, keyConverter, valueConverter, false);
     }
 
 
@@ -84,11 +73,7 @@ public class OffsetStorageReaderImpl implements OffsetStorageReader {
         // Get serialized key -> serialized value from backing store
         Map<ByteBuffer, ByteBuffer> raw;
         try {
-            if (transactional) {
-                raw = ((KafkaOffsetBackingStore)backingStore).xget(serializedToOriginal.keySet(), null).get();
-            } else {
-                raw = backingStore.get(serializedToOriginal.keySet(), null).get();
-            }
+            raw = backingStore.get(serializedToOriginal.keySet(), null).get();
         } catch (Exception e) {
             log.error("Failed to fetch offsets from namespace {}: ", namespace, e);
             throw new ConnectException("Failed to fetch offsets.", e);

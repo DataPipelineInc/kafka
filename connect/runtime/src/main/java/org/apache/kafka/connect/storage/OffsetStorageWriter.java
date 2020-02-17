@@ -194,27 +194,15 @@ public class OffsetStorageWriter {
             // And submit the data
             log.debug("Submitting {} entries to backing store. The offsets are: {}", offsetsSerialized.size(), toFlush);
         }
-        if (producer != null) {
-            return ((KafkaOffsetBackingStore) backingStore).xSet(offsetsSerialized, producer, new Callback<Void>() {
-                @Override
-                public void onCompletion(Throwable error, Void result) {
-                    boolean isCurrent = handleFinishWrite(flushId, error, result);
-                    if (isCurrent && callback != null) {
-                        callback.onCompletion(error, result);
-                    }
+        return ((KafkaOffsetBackingStore) backingStore).set(producer, offsetsSerialized, new Callback<Void>() {
+            @Override
+            public void onCompletion(Throwable error, Void result) {
+                boolean isCurrent = handleFinishWrite(flushId, error, result);
+                if (isCurrent && callback != null) {
+                    callback.onCompletion(error, result);
                 }
-            });
-        } else {
-            return backingStore.set(offsetsSerialized, new Callback<Void>() {
-                @Override
-                public void onCompletion(Throwable error, Void result) {
-                    boolean isCurrent = handleFinishWrite(flushId, error, result);
-                    if (isCurrent && callback != null) {
-                        callback.onCompletion(error, result);
-                    }
-                }
-            });
-        }
+            }
+        });
     }
 
     /**
