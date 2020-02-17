@@ -40,14 +40,22 @@ public class OffsetStorageReaderImpl implements OffsetStorageReader {
     private final String namespace;
     private final Converter keyConverter;
     private final Converter valueConverter;
+    private final boolean transactional;
 
     public OffsetStorageReaderImpl(OffsetBackingStore backingStore, String namespace,
-                                   Converter keyConverter, Converter valueConverter) {
+                                   Converter keyConverter, Converter valueConverter, boolean transactional) {
         this.backingStore = backingStore;
         this.namespace = namespace;
         this.keyConverter = keyConverter;
         this.valueConverter = valueConverter;
+        this.transactional = transactional;
     }
+
+    public OffsetStorageReaderImpl(OffsetBackingStore backingStore, String namespace,
+                                   Converter keyConverter, Converter valueConverter) {
+        this(backingStore, namespace, keyConverter, valueConverter, false);
+    }
+
 
     @Override
     public <T> Map<String, Object> offset(Map<String, T> partition) {
@@ -76,7 +84,11 @@ public class OffsetStorageReaderImpl implements OffsetStorageReader {
         // Get serialized key -> serialized value from backing store
         Map<ByteBuffer, ByteBuffer> raw;
         try {
-            raw = backingStore.get(serializedToOriginal.keySet(), null).get();
+            if (transactional) {
+                raw = ((KafkaOffsetBackingStore)backingStore).xget(serializedToOriginal.keySet(), null).get();
+            } else {
+                raw = backingStore.get(serializedToOriginal.keySet(), null).get();
+            }
         } catch (Exception e) {
             log.error("Failed to fetch offsets from namespace {}: ", namespace, e);
             throw new ConnectException("Failed to fetch offsets.", e);

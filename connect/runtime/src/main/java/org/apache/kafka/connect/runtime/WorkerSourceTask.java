@@ -543,7 +543,7 @@ class WorkerSourceTask extends WorkerTask {
         }
 
         // Now we can actually flush the offsets to user storage.
-        Future<Void> flushFuture = offsetWriter.doFlush(new org.apache.kafka.connect.util.Callback<Void>() {
+        Future<Void> flushFuture = offsetWriter.doFlush(transactional? producer:null, new org.apache.kafka.connect.util.Callback<Void>() {
             @Override
             public void onCompletion(Throwable error, Void result) {
                 if (error != null) {

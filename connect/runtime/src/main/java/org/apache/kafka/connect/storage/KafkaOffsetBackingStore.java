@@ -152,6 +152,25 @@ public class KafkaOffsetBackingStore implements OffsetBackingStore {
         return future;
     }
 
+    public Future<Map<ByteBuffer, ByteBuffer>> xget(final Collection<ByteBuffer> keys,
+                                                   final Callback<Map<ByteBuffer, ByteBuffer>> callback) {
+        ConvertingFutureCallback<Void, Map<ByteBuffer, ByteBuffer>> future = new ConvertingFutureCallback<Void, Map<ByteBuffer, ByteBuffer>>(callback) {
+            @Override
+            public Map<ByteBuffer, ByteBuffer> convert(Void result) {
+                Map<ByteBuffer, ByteBuffer> values = new HashMap<>();
+                for (ByteBuffer key : keys)
+                    values.put(key, data.get(key));
+                return values;
+            }
+        };
+        // This operation may be relatively (but not too) expensive since it always requires checking end offsets, even
+        // if we've already read up to the end. However, it also should not be common (offsets should only be read when
+        // resetting a task). Always requiring that we read to the end is simpler than trying to differentiate when it
+        // is safe not to (which should only be if we *know* we've maintained ownership since the last write).
+        offsetLogTx.readToEnd(future);
+        return future;
+    }
+
     @Override
     public Future<Void> set(Map<ByteBuffer, ByteBuffer> values, Callback<Void> callback) {
         SetCallbackFuture producerCallback = new SetCallbackFuture(values.size(), callback);
