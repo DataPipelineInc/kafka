@@ -25,6 +25,7 @@ import org.apache.kafka.common.metrics.stats.Avg;
 import org.apache.kafka.common.metrics.stats.Frequencies;
 import org.apache.kafka.common.metrics.stats.Max;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.runtime.AbstractStatus.State;
 import org.apache.kafka.connect.runtime.ConnectMetrics.LiteralSupplier;
 import org.apache.kafka.connect.runtime.ConnectMetrics.MetricGroup;
@@ -81,6 +82,12 @@ abstract class WorkerTask implements Runnable {
         this.taskMetricsGroup.recordState(this.targetState);
         this.retryWithToleranceOperator = retryWithToleranceOperator;
     }
+
+
+    static TaskStatus.Listener taskDelegateListener(Task task, TaskStatus.Listener statusListener) {
+        return new TaskStatusListener(task, statusListener);
+    }
+
 
     public ConnectorTaskId id() {
         return id;
@@ -440,6 +447,50 @@ abstract class WorkerTask implements Runnable {
 
         protected MetricGroup metricGroup() {
             return metricGroup;
+        }
+    }
+
+    static class TaskStatusListener implements  TaskStatus.Listener {
+        private final Task task;
+        private final TaskStatus.Listener delegateListener;
+
+        public TaskStatusListener(Task task, TaskStatus.Listener delegateListener) {
+            this.task = task;
+            this.delegateListener = delegateListener;
+        }
+
+        @Override
+        public void onStartup(ConnectorTaskId id) {
+            delegateListener.onStartup(id);
+        }
+
+        @Override
+        public void onPause(ConnectorTaskId id) {
+            task.onPause();
+            delegateListener.onPause(id);
+        }
+
+        @Override
+        public void onResume(ConnectorTaskId id) {
+            task.onResume();
+            delegateListener.onResume(id);
+        }
+
+        @Override
+        public void onFailure(ConnectorTaskId id, Throwable cause) {
+            task.onFailure(id.connector(), id.task(), cause);
+            delegateListener.onFailure(id, cause);
+
+        }
+
+        @Override
+        public void onShutdown(ConnectorTaskId id) {
+            delegateListener.onShutdown(id);
+        }
+
+        @Override
+        public void onDeletion(ConnectorTaskId id) {
+
         }
     }
 }

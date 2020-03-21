@@ -141,9 +141,7 @@ class WorkerSourceTask extends WorkerTask {
                             Time time,
                             RetryWithToleranceOperator retryWithToleranceOperator,
                             boolean transactional) {
-
-        super(id, statusListener, initialState, loader, connectMetrics, retryWithToleranceOperator);
-
+        super(id, taskDelegateListener(task, statusListener), initialState, loader, connectMetrics, retryWithToleranceOperator);
         this.workerConfig = workerConfig;
         this.task = task;
         this.configState = configState;

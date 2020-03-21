@@ -108,7 +108,7 @@ class WorkerSinkTask extends WorkerTask {
                           ClassLoader loader,
                           Time time,
                           RetryWithToleranceOperator retryWithToleranceOperator) {
-        super(id, statusListener, initialState, loader, connectMetrics, retryWithToleranceOperator);
+        super(id, taskDelegateListener(task, statusListener), initialState, loader, connectMetrics, retryWithToleranceOperator);
 
         this.workerConfig = workerConfig;
         this.task = task;

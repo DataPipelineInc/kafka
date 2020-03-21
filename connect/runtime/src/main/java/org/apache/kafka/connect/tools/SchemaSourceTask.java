@@ -168,4 +168,19 @@ public class SchemaSourceTask extends SourceTask {
     public void stop() {
         throttler.wakeup();
     }
+
+    @Override
+    public void onPause() {
+
+    }
+
+    @Override
+    public void onResume() {
+
+    }
+
+    @Override
+    public void onFailure(String connector, int task, Throwable cause) {
+
+    }
 }

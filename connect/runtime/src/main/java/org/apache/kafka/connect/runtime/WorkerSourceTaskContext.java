@@ -45,4 +45,9 @@ public class WorkerSourceTaskContext implements SourceTaskContext {
     public OffsetStorageReader offsetStorageReader() {
         return reader;
     }
+
+    @Override
+    public int taskId() {
+        return task.id().task();
+    }
 }

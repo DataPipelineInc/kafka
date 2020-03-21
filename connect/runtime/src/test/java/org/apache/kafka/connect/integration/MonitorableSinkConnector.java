@@ -155,5 +155,20 @@ public class MonitorableSinkConnector extends TestSinkConnector {
         public void stop() {
             taskHandle.recordTaskStop();
         }
+
+        @Override
+        public void onPause() {
+
+        }
+
+        @Override
+        public void onResume() {
+
+        }
+
+        @Override
+        public void onFailure(String connector, int task, Throwable cause) {
+
+        }
     }
 }

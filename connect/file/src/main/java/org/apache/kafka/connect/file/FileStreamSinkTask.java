@@ -93,6 +93,21 @@ public class FileStreamSinkTask extends SinkTask {
             outputStream.close();
     }
 
+    @Override
+    public void onPause() {
+
+    }
+
+    @Override
+    public void onResume() {
+
+    }
+
+    @Override
+    public void onFailure(String connector, int task, Throwable cause) {
+
+    }
+
     private String logFilename() {
         return filename == null ? "stdout" : filename;
     }

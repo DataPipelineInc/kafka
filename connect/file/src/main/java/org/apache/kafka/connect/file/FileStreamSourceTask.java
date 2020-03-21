@@ -220,6 +220,21 @@ public class FileStreamSourceTask extends SourceTask {
         }
     }
 
+    @Override
+    public void onPause() {
+
+    }
+
+    @Override
+    public void onResume() {
+
+    }
+
+    @Override
+    public void onFailure(String connector, int task, Throwable cause) {
+
+    }
+
     private Map<String, String> offsetKey(String filename) {
         return Collections.singletonMap(FILENAME_FIELD, filename);
     }

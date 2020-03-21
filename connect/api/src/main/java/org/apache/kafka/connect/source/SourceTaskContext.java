@@ -38,4 +38,6 @@ public interface SourceTaskContext {
      * Get the OffsetStorageReader for this SourceTask.
      */
     OffsetStorageReader offsetStorageReader();
+
+    int taskId();
 }
