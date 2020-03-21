@@ -105,4 +105,19 @@ public class VerifiableSinkTask extends SinkTask {
     public void stop() {
 
     }
+
+    @Override
+    public void onPause() {
+
+    }
+
+    @Override
+    public void onResume() {
+
+    }
+
+    @Override
+    public void onFailure(Throwable cause) {
+
+    }
 }

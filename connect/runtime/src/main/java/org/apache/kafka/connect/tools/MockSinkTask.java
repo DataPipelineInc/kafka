@@ -78,6 +78,21 @@ public class MockSinkTask extends SinkTask {
 
     }
 
+    @Override
+    public void onPause() {
+
+    }
+
+    @Override
+    public void onResume() {
+
+    }
+
+    @Override
+    public void onFailure(Throwable cause) {
+
+    }
+
     private void setTimeout() {
         // Set a reasonable minimum delay. Since this mock task may not actually consume any data from Kafka, it may only
         // see put() calls triggered by wakeups for offset commits. To make sure we aren't tied to the offset commit

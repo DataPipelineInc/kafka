@@ -70,4 +70,19 @@ public class MockSourceTask extends SourceTask {
     public void stop() {
 
     }
+
+    @Override
+    public void onPause() {
+
+    }
+
+    @Override
+    public void onResume() {
+
+    }
+
+    @Override
+    public void onFailure(Throwable cause) {
+
+    }
 }
