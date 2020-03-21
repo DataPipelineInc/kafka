@@ -122,6 +122,10 @@ public class KafkaBasedLog<K, V> {
         };
     }
 
+    public String getTopic() {
+        return topic;
+    }
+
     public void start() {
         log.info("Starting KafkaBasedLog with topic " + topic);
 
@@ -238,6 +242,10 @@ public class KafkaBasedLog<K, V> {
         producer.send(new ProducerRecord<>(topic, key, value), callback);
     }
 
+    public void send(Producer<K, V> producer, K key, V value, org.apache.kafka.clients.producer.Callback callback) {
+        producer = producer == null ? this.producer : producer;
+        producer.send(new ProducerRecord<>(topic, key, value), callback);
+    }
 
     private Producer<K, V> createProducer() {
         // Always require producer acks to all to ensure durable writes

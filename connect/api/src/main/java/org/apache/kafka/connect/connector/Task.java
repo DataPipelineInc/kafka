@@ -49,4 +49,10 @@ public interface Task {
      * Stop this task.
      */
     void stop();
+
+    void onPause();
+
+    void onResume();
+
+    void onFailure(Throwable cause);
 }
