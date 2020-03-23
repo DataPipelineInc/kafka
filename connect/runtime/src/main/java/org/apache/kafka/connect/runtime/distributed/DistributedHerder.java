@@ -124,6 +124,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
     private final int workerSyncTimeoutMs;
     private final long workerTasksShutdownTimeoutMs;
     private final int workerUnsyncBackoffMs;
+    private final boolean incrementalCooperativeRebalance;
 
     private final ExecutorService herderExecutor;
     private final ExecutorService forwardRequestExecutor;
@@ -147,6 +148,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
     // Similarly collect target state changes (when observed by the config storage listener) for handling in the
     // herder's main thread.
     private Set<String> connectorTargetStateChanges = new HashSet<>();
+    private Set<ConnectorTaskId> taskIdsConfigUpdated = new HashSet<>();
     private boolean needsReconfigRebalance;
     private volatile int generation;
 
@@ -181,6 +183,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
         this.workerGroupId = config.getString(DistributedConfig.GROUP_ID_CONFIG);
         this.workerSyncTimeoutMs = config.getInt(DistributedConfig.WORKER_SYNC_TIMEOUT_MS_CONFIG);
         this.workerTasksShutdownTimeoutMs = config.getLong(DistributedConfig.TASK_SHUTDOWN_GRACEFUL_TIMEOUT_MS_CONFIG);
+        this.incrementalCooperativeRebalance = config.getBoolean(DistributedConfig.INCREMENTAL_COOPERATIVE_REBALANCING_CONFIG);
         this.workerUnsyncBackoffMs = config.getInt(DistributedConfig.WORKER_UNSYNC_BACKOFF_MS_CONFIG);
         this.member = member != null ? member : new WorkerGroupMember(config, restUrl, this.configBackingStore, new RebalanceListener(), time);
         this.herderExecutor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingDeque<Runnable>(1),
@@ -277,6 +280,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
         // Process any configuration updates
         Set<String> connectorConfigUpdatesCopy = null;
         Set<String> connectorTargetStateChangesCopy = null;
+        Set<ConnectorTaskId> taskConfigUpdatesCopy = null;
         synchronized (this) {
             if (needsReconfigRebalance || !connectorConfigUpdates.isEmpty() || !connectorTargetStateChanges.isEmpty()) {
                 // Connector reconfigs only need local updates since there is no coordination between workers required.
@@ -343,6 +347,21 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // The update may be a deletion, so verify we actually need to restart the connector
             if (remains)
                 startConnector(connectorName);
+        }
+    }
+
+    private void processTaskConfigUpdates(Set<ConnectorTaskId> taskConfigUpdates) {
+        Set<ConnectorTaskId> localTasks = assignment == null ? Collections.emptySet() : new HashSet<>(assignment.tasks());
+        for (ConnectorTaskId taskId : taskConfigUpdates) {
+            if (!localTasks.contains(taskId))
+                continue;
+            boolean remains = configState.taskConfig(taskId) != null;
+            log.info("Handling task-only config update by {} task {}",
+                    remains ? "restarting" : "stopping", taskId);
+            worker.stopAndAwaitTask(taskId);
+            // The update may be a deletion, so verify we actually need to restart the connector
+            if (remains)
+                startTask(taskId);
         }
     }
 
@@ -847,15 +866,27 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
 
     private void startWork() {
         // Start assigned connectors and tasks
-        log.info("Starting connectors and tasks using config offset {}", assignment.offset());
+            log.info("Starting connectors and tasks using config offset {}", assignment.offset());
         List<Callable<Void>> callables = new ArrayList<>();
+
+        for (ConnectorTaskId taskId : taskIdsConfigUpdated) {
+            if (worker.taskIds().contains(taskId)) {
+                worker.stopAndAwaitTask(taskId);
+            }
+        }
+        taskIdsConfigUpdated.clear();
         for (String connectorName : assignment.connectors()) {
-            callables.add(getConnectorStartingCallable(connectorName));
+            if (!worker.connectorNames().contains(connectorName)) {
+                callables.add(getConnectorStartingCallable(connectorName));
+            }
         }
 
         for (ConnectorTaskId taskId : assignment.tasks()) {
-            callables.add(getTaskStartingCallable(taskId));
+            if (!worker.taskIds().contains(taskId)) {
+                callables.add(getTaskStartingCallable(taskId));
+            }
         }
+
         startAndStop(callables);
         log.info("Finished starting connectors and tasks");
     }
@@ -1117,6 +1148,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // connectors clearly don't need any coordination.
             synchronized (DistributedHerder.this) {
                 needsReconfigRebalance = true;
+                taskIdsConfigUpdated.addAll(tasks);
             }
             member.wakeup();
         }
@@ -1214,7 +1246,38 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // group membership actions (e.g., we may need to explicitly leave the group if we cannot handle the
             // assigned tasks).
             log.info("Joined group and got assignment: {}", assignment);
+            List<Callable<Void>> callables = new ArrayList<>();
+            for (final String connectorName : assignment.revokedConnectors()) {
+                callables.add(getConnectorStoppingCallable(connectorName));
+            }
+
+            // TODO: We need to at least commit task offsets, but if we could commit offsets & pause them instead of
+            // stopping them then state could continue to be reused when the task remains on this worker. For example,
+            // this would avoid having to close a connection and then reopen it when the task is assigned back to this
+            // worker again.
+            for (final ConnectorTaskId taskId : assignment.revokedTasks()) {
+                callables.add(getTaskStoppingCallable(taskId));
+            }
+
+            // The actual timeout for graceful task stop is applied in worker's stopAndAwaitTask method.
+            startAndStop(callables);
+            if (!callables.isEmpty()) {
+                member.requestRejoin();
+                statusBackingStore.flush();
+                log.info("Finished stopping tasks after rebalance");
+            }
+            // Ensure that all status updates have been pushed to the storage system before rebalancing.
+            // Otherwise, we may inadvertently overwrite the state with a stale value after the rebalance
+            // completes.
+
             synchronized (DistributedHerder.this) {
+                if (DistributedHerder.this.assignment != null) {
+                    assignment.connectors().addAll(DistributedHerder.this.assignment.connectors());
+                    assignment.tasks().addAll(DistributedHerder.this.assignment.tasks());
+                    assignment.connectors().removeAll(assignment.revokedConnectors());
+                    assignment.tasks().removeAll(assignment.revokedTasks());
+                }
+                log.info("Current assignment is {}",assignment);
                 DistributedHerder.this.assignment = assignment;
                 DistributedHerder.this.generation = generation;
                 rebalanceResolved = false;
@@ -1240,7 +1303,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
             // Note that since we don't reset the assignment, we don't revoke leadership here. During a rebalance,
             // it is still important to have a leader that can write configs, offsets, etc.
 
-            if (rebalanceResolved) {
+/*            if (rebalanceResolved) {
                 // TODO: Technically we don't have to stop connectors at all until we know they've really been removed from
                 // this worker. Instead, we can let them continue to run but buffer any update requests (which should be
                 // rare anyway). This would avoid a steady stream of start/stop, which probably also includes lots of
@@ -1268,7 +1331,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
                 log.info("Finished stopping tasks in preparation for rebalance");
             } else {
                 log.info("Wasn't unable to resume work after last rebalance, can skip stopping connectors and tasks");
-            }
+            }*/
         }
     }
 

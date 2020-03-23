@@ -140,6 +140,9 @@ public class ConnectorConfig extends AbstractConfig {
             "a failure. This is 'false' by default, which will prevent record keys, values, and headers from being written to log files, " +
             "although some information such as topic and partition number will still be logged.";
 
+    public static final String TRANSACTIONAL_SOURCE_COMMIT = "transactional.source.commit";
+    protected static final String TRANSACTIONAL_SOURCE_COMMIT_DOC = "source record offset commit is transactional.";
+
     private final EnrichedConnectorConfig enrichedConfig;
     private static class EnrichedConnectorConfig extends AbstractConfig {
         EnrichedConnectorConfig(ConfigDef configDef, Map<String, String> props) {
@@ -190,7 +193,10 @@ public class ConnectorConfig extends AbstractConfig {
                 .define(ERRORS_LOG_ENABLE_CONFIG, Type.BOOLEAN, ERRORS_LOG_ENABLE_DEFAULT, Importance.MEDIUM,
                         ERRORS_LOG_ENABLE_DOC, ERROR_GROUP, ++orderInErrorGroup, Width.SHORT, ERRORS_LOG_ENABLE_DISPLAY)
                 .define(ERRORS_LOG_INCLUDE_MESSAGES_CONFIG, Type.BOOLEAN, ERRORS_LOG_INCLUDE_MESSAGES_DEFAULT, Importance.MEDIUM,
-                        ERRORS_LOG_INCLUDE_MESSAGES_DOC, ERROR_GROUP, ++orderInErrorGroup, Width.SHORT, ERRORS_LOG_INCLUDE_MESSAGES_DISPLAY);
+                        ERRORS_LOG_INCLUDE_MESSAGES_DOC, ERROR_GROUP, ++orderInErrorGroup, Width.SHORT, ERRORS_LOG_INCLUDE_MESSAGES_DISPLAY)
+                .define(TRANSACTIONAL_SOURCE_COMMIT, Type.BOOLEAN,
+                        false, Importance.LOW,
+                        TRANSACTIONAL_SOURCE_COMMIT_DOC);
     }
 
     public ConnectorConfig(Plugins plugins) {
