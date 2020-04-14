@@ -82,7 +82,7 @@ public class MockSourceTask extends SourceTask {
     }
 
     @Override
-    public void onFailure(Throwable cause) {
+    public void onFailure(String connector, int task, Throwable cause) {
 
     }
 }

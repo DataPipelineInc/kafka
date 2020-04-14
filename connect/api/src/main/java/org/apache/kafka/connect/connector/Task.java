@@ -54,5 +54,5 @@ public interface Task {
 
     void onResume();
 
-    void onFailure(Throwable cause);
+    void onFailure(String connector, int task, Throwable cause);
 }

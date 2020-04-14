@@ -472,7 +472,7 @@ abstract class WorkerTask implements Runnable {
 
         @Override
         public void onFailure(ConnectorTaskId id, Throwable cause) {
-            task.onFailure(cause);
+            task.onFailure(id.connector(), id.task(), cause);
             delegateListener.onFailure(id, cause);
 
         }
