@@ -415,7 +415,7 @@ public class Fetcher<K, V> implements Closeable {
 
     private Long offsetResetStrategyTimestamp(final TopicPartition partition) {
         OffsetResetStrategy strategy = subscriptions.resetStrategy(partition);
-        if (strategy == OffsetResetStrategy.EARLIEST)
+        if (strategy == OffsetResetStrategy.EARLIEST || strategy == OffsetResetStrategy.EARLIEST_IF_MISSING)
             return ListOffsetRequest.EARLIEST_TIMESTAMP;
         else if (strategy == OffsetResetStrategy.LATEST)
             return ListOffsetRequest.LATEST_TIMESTAMP;

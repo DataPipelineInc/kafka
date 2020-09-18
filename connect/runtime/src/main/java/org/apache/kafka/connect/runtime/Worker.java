@@ -510,7 +510,7 @@ public class Worker {
             Map<String, Object> producerProps = producerConfigs(id, "connector-producer-" + id, config, connConfig, connectorClass,
                                                                 connectorClientConfigOverridePolicy);
             if (connConfig.getBoolean(ConnectorConfig.TRANSACTIONAL)) {
-                producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, String.format("%s-%s",connConfig.getString(ConnectorConfig.NAME_CONFIG), id));
+                producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, String.format("%s-%s", connConfig.getString(ConnectorConfig.NAME_CONFIG), id));
                 producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
                 producerProps.put(ProducerConfig.ACKS_CONFIG, "all");
             }
@@ -585,7 +585,7 @@ public class Worker {
         consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
                   Utils.join(config.getList(WorkerConfig.BOOTSTRAP_SERVERS_CONFIG), ","));
         consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, config.getString(WorkerConfig.AUTO_OFFSET_RESET_CONFIG));
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer");
 
