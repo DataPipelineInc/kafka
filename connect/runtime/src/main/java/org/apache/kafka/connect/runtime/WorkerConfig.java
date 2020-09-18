@@ -136,6 +136,11 @@ public class WorkerConfig extends AbstractConfig {
             + "data to be committed in a future attempt.";
     public static final long OFFSET_COMMIT_TIMEOUT_MS_DEFAULT = 5000L;
 
+    public static final String AUTO_OFFSET_RESET_CONFIG = "auto.offset.reset";
+    private static final String AUTO_OFFSET_RESET_DOC
+            = "Auto Offset reset mode for consumer.";
+    public static final String  AUTO_OFFSET_RESET_CONFIG_DEFAULT = "earliest";
+
     /**
      * @deprecated As of 1.1.0.
      */
@@ -298,7 +303,9 @@ public class WorkerConfig extends AbstractConfig {
                 .define(REST_EXTENSION_CLASSES_CONFIG, Type.LIST, "",
                         Importance.LOW, REST_EXTENSION_CLASSES_DOC)
                 .define(CONNECTOR_CLIENT_POLICY_CLASS_CONFIG, Type.STRING, CONNECTOR_CLIENT_POLICY_CLASS_DEFAULT,
-                        Importance.MEDIUM, CONNECTOR_CLIENT_POLICY_CLASS_DOC);
+                        Importance.MEDIUM, CONNECTOR_CLIENT_POLICY_CLASS_DOC)
+                .define(AUTO_OFFSET_RESET_CONFIG, Type.STRING, AUTO_OFFSET_RESET_CONFIG_DEFAULT,
+                        in("earliest", "earliest_if_missing"), Importance.MEDIUM, AUTO_OFFSET_RESET_DOC);
     }
 
     private void logInternalConverterDeprecationWarnings(Map<String, String> props) {

@@ -352,7 +352,9 @@ public class SubscriptionState {
             log.debug("Skipping reset of partition {} since it is no longer assigned", tp);
         } else if (!state.awaitingReset()) {
             log.debug("Skipping reset of partition {} since reset is no longer needed", tp);
-        } else if (requestedResetStrategy != state.resetStrategy) {
+        } else if (requestedResetStrategy != state.resetStrategy
+            && (OffsetResetStrategy.EARLIEST_IF_MISSING != state.resetStrategy
+                || OffsetResetStrategy.EARLIEST != requestedResetStrategy)) {
             log.debug("Skipping reset of partition {} since an alternative reset has been requested", tp);
         } else {
             log.info("Resetting offset for partition {} to offset {}.", tp, offset);
@@ -542,7 +544,8 @@ public class SubscriptionState {
     }
 
     boolean hasDefaultOffsetResetPolicy() {
-        return defaultResetStrategy != OffsetResetStrategy.NONE;
+        return defaultResetStrategy != OffsetResetStrategy.NONE
+            && defaultResetStrategy != OffsetResetStrategy.EARLIEST_IF_MISSING;
     }
 
     public synchronized boolean isOffsetResetNeeded(TopicPartition partition) {
