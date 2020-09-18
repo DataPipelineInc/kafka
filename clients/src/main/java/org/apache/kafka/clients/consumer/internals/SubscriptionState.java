@@ -352,7 +352,9 @@ public class SubscriptionState {
             log.debug("Skipping reset of partition {} since it is no longer assigned", tp);
         } else if (!state.awaitingReset()) {
             log.debug("Skipping reset of partition {} since reset is no longer needed", tp);
-        } else if (requestedResetStrategy != state.resetStrategy) {
+        } else if (requestedResetStrategy != state.resetStrategy
+            && (OffsetResetStrategy.SAFE != state.resetStrategy
+                || OffsetResetStrategy.EARLIEST != requestedResetStrategy)) {
             log.debug("Skipping reset of partition {} since an alternative reset has been requested", tp);
         } else {
             log.info("Resetting offset for partition {} to offset {}.", tp, offset);
@@ -571,16 +573,25 @@ public class SubscriptionState {
 
     public synchronized void resetMissingPositions() {
         final Set<TopicPartition> partitionsWithNoOffsets = new HashSet<>();
-        assignment.stream().forEach(state -> {
-            TopicPartition tp = state.topicPartition();
-            TopicPartitionState partitionState = state.value();
-            if (!partitionState.hasPosition()) {
-                if (defaultResetStrategy == OffsetResetStrategy.NONE)
-                    partitionsWithNoOffsets.add(tp);
-                else
+    assignment.stream()
+        .forEach(
+            state -> {
+              TopicPartition tp = state.topicPartition();
+              TopicPartitionState partitionState = state.value();
+              if (!partitionState.hasPosition()) {
+                if (defaultResetStrategy == OffsetResetStrategy.NONE) {
+                  partitionsWithNoOffsets.add(tp);
+                } else if (defaultResetStrategy == OffsetResetStrategy.SAFE) {
+                  if (null == partitionState.logStartOffset) {
                     requestOffsetReset(tp);
-            }
-        });
+                  } else {
+                    partitionsWithNoOffsets.add(tp);
+                  }
+                } else {
+                  requestOffsetReset(tp);
+                }
+              }
+            });
 
         if (!partitionsWithNoOffsets.isEmpty())
             throw new NoOffsetForPartitionException(partitionsWithNoOffsets);

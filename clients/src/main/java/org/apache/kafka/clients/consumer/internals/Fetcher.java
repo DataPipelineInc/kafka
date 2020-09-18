@@ -29,6 +29,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.clients.consumer.internals.SubscriptionState.FetchPosition;
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.Node;
@@ -415,7 +416,7 @@ public class Fetcher<K, V> implements Closeable {
 
     private Long offsetResetStrategyTimestamp(final TopicPartition partition) {
         OffsetResetStrategy strategy = subscriptions.resetStrategy(partition);
-        if (strategy == OffsetResetStrategy.EARLIEST)
+        if (strategy == OffsetResetStrategy.EARLIEST || strategy == OffsetResetStrategy.SAFE)
             return ListOffsetRequest.EARLIEST_TIMESTAMP;
         else if (strategy == OffsetResetStrategy.LATEST)
             return ListOffsetRequest.LATEST_TIMESTAMP;
@@ -450,6 +451,13 @@ public class Fetcher<K, V> implements Closeable {
 
         final Map<TopicPartition, Long> offsetResetTimestamps = new HashMap<>();
         for (final TopicPartition partition : partitions) {
+            FetchPosition position = subscriptions.position(partition);
+            if (null != position && 0L < position.offset
+                && OffsetResetStrategy.SAFE == subscriptions.resetStrategy(partition)) {
+                Map<TopicPartition, Long> outofRangePartition = new HashMap<>();
+                outofRangePartition.put(partition, position.offset);
+                throw new OffsetOutOfRangeException(outofRangePartition);
+            }
             Long timestamp = offsetResetStrategyTimestamp(partition);
             if (timestamp != null)
                 offsetResetTimestamps.put(partition, timestamp);
