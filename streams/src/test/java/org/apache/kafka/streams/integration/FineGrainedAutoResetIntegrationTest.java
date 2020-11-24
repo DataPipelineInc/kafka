@@ -38,7 +38,6 @@ import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.test.IntegrationTest;
 import org.apache.kafka.test.StreamsTestUtils;
-import org.apache.kafka.test.TestCondition;
 import org.apache.kafka.test.TestUtils;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -60,7 +59,7 @@ import kafka.utils.MockTime;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.fail;
 
 @Category({IntegrationTest.class})
@@ -158,7 +157,7 @@ public class FineGrainedAutoResetIntegrationTest {
     }
 
     @Test
-    public void shouldOnlyReadRecordsWhereEarliestSpecifiedWithNoCommittedOffsetsWithGlobalAutoOffsetResetLatest() throws  Exception {
+    public void shouldOnlyReadRecordsWhereEarliestSpecifiedWithNoCommittedOffsetsWithGlobalAutoOffsetResetLatest() throws Exception {
         streamsConfiguration.put(StreamsConfig.consumerPrefix(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG), "latest");
 
         final List<String> expectedReceivedValues = Arrays.asList(topic1TestMessage, topic2TestMessage);
@@ -166,13 +165,13 @@ public class FineGrainedAutoResetIntegrationTest {
     }
 
     @Test
-    public void shouldOnlyReadRecordsWhereEarliestSpecifiedWithNoCommittedOffsetsWithDefaultGlobalAutoOffsetResetEarliest() throws  Exception {
+    public void shouldOnlyReadRecordsWhereEarliestSpecifiedWithNoCommittedOffsetsWithDefaultGlobalAutoOffsetResetEarliest() throws Exception {
         final List<String> expectedReceivedValues = Arrays.asList(topic1TestMessage, topic2TestMessage, topicYTestMessage, topicZTestMessage);
         shouldOnlyReadForEarliest("_1", TOPIC_1_1, TOPIC_2_1, TOPIC_A_1, TOPIC_C_1, TOPIC_Y_1, TOPIC_Z_1, OUTPUT_TOPIC_1, expectedReceivedValues);
     }
 
     @Test
-    public void shouldOnlyReadRecordsWhereEarliestSpecifiedWithInvalidCommittedOffsets() throws  Exception {
+    public void shouldOnlyReadRecordsWhereEarliestSpecifiedWithInvalidCommittedOffsets() throws Exception {
         commitInvalidOffsets();
 
         final List<String> expectedReceivedValues = Arrays.asList(topic1TestMessage, topic2TestMessage, topicYTestMessage, topicZTestMessage);
@@ -229,9 +228,9 @@ public class FineGrainedAutoResetIntegrationTest {
     }
 
     private void commitInvalidOffsets() {
-        final KafkaConsumer consumer = new KafkaConsumer(TestUtils.consumerConfig(
+        final KafkaConsumer<String, String> consumer = new KafkaConsumer<>(TestUtils.consumerConfig(
             CLUSTER.bootstrapServers(),
-            streamsConfiguration.getProperty(StreamsConfig.APPLICATION_ID_CONFIG),
+            "commit_invalid_offset_app", // Having a separate application id to avoid waiting for last test poll interval timeout.
             StringDeserializer.class,
             StringDeserializer.class));
 
@@ -301,16 +300,10 @@ public class FineGrainedAutoResetIntegrationTest {
 
         final TestingUncaughtExceptionHandler uncaughtExceptionHandler = new TestingUncaughtExceptionHandler();
 
-        final TestCondition correctExceptionThrownCondition = new TestCondition() {
-            @Override
-            public boolean conditionMet() {
-                return uncaughtExceptionHandler.correctExceptionThrown;
-            }
-        };
-
         streams.setUncaughtExceptionHandler(uncaughtExceptionHandler);
         streams.start();
-        TestUtils.waitForCondition(correctExceptionThrownCondition, "The expected NoOffsetForPartitionException was never thrown");
+        TestUtils.waitForCondition(() -> uncaughtExceptionHandler.correctExceptionThrown,
+                "The expected NoOffsetForPartitionException was never thrown");
         streams.close();
     }
 

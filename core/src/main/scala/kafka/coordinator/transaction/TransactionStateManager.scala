@@ -33,7 +33,6 @@ import org.apache.kafka.common.{KafkaException, TopicPartition}
 import org.apache.kafka.common.internals.Topic
 import org.apache.kafka.common.protocol.Errors
 import org.apache.kafka.common.record.{FileRecords, MemoryRecords, SimpleRecord}
-import org.apache.kafka.common.requests.IsolationLevel
 import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 import org.apache.kafka.common.requests.TransactionResult
 import org.apache.kafka.common.utils.{Time, Utils}
@@ -288,13 +287,13 @@ class TransactionStateManager(brokerId: Int,
 
     replicaManager.getLog(topicPartition) match {
       case None =>
-        warn(s"Attempted to load offsets and group metadata from $topicPartition, but found no log")
+        warn(s"Attempted to load transaction metadata from $topicPartition, but found no log")
 
       case Some(log) =>
         // buffer may not be needed if records are read from memory
         var buffer = ByteBuffer.allocate(0)
 
-        // loop breaks if leader changes at any time during the load, since getHighWatermark is -1
+        // loop breaks if leader changes at any time during the load, since logEndOffset is -1
         var currOffset = log.logStartOffset
 
         try {
@@ -313,7 +312,7 @@ class TransactionStateManager(brokerId: Int,
                 // minOneMessage = true in the above log.read means that the buffer may need to be grown to ensure progress can be made
                 if (buffer.capacity < bytesNeeded) {
                   if (config.transactionLogLoadBufferSize < bytesNeeded)
-                    warn(s"Loaded offsets and group metadata from $topicPartition with buffer larger ($bytesNeeded bytes) than " +
+                    warn(s"Loaded transaction metadata from $topicPartition with buffer larger ($bytesNeeded bytes) than " +
                       s"configured transaction.state.log.load.buffer.size (${config.transactionLogLoadBufferSize} bytes)")
 
                   buffer = ByteBuffer.allocate(bytesNeeded)
@@ -424,7 +423,7 @@ class TransactionStateManager(brokerId: Int,
       }
     }
 
-    scheduler.schedule(s"load-txns-for-partition-$topicPartition", loadTransactions)
+    scheduler.schedule(s"load-txns-for-partition-$topicPartition", () => loadTransactions)
   }
 
   /**
@@ -459,7 +458,7 @@ class TransactionStateManager(brokerId: Int,
       }
     }
 
-    scheduler.schedule(s"remove-txns-for-partition-$topicPartition", removeTransactions)
+    scheduler.schedule(s"remove-txns-for-partition-$topicPartition", () => removeTransactions)
   }
 
   private def validateTransactionTopicPartitionCountIsStable(): Unit = {

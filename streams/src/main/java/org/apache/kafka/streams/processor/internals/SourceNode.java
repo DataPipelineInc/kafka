@@ -52,6 +52,14 @@ public class SourceNode<K, V> extends ProcessorNode<K, V> {
         this(name, topics, null, keyDeserializer, valDeserializer);
     }
 
+    public Deserializer getKeyDeserializer() {
+        return keyDeserializer;
+    }
+
+    public Deserializer getValueDeserializer() {
+        return valDeserializer;
+    }
+
     K deserializeKey(final String topic, final Headers headers, final byte[] data) {
         return keyDeserializer.deserialize(topic, headers, data);
     }
@@ -67,15 +75,18 @@ public class SourceNode<K, V> extends ProcessorNode<K, V> {
         this.context = context;
 
         // if deserializers are null, get the default ones from the context
-        if (this.keyDeserializer == null)
+        if (this.keyDeserializer == null) {
             this.keyDeserializer = (Deserializer<K>) context.keySerde().deserializer();
-        if (this.valDeserializer == null)
+        }
+        if (this.valDeserializer == null) {
             this.valDeserializer = (Deserializer<V>) context.valueSerde().deserializer();
+        }
 
         // if value deserializers are for {@code Change} values, set the inner deserializer when necessary
         if (this.valDeserializer instanceof ChangedDeserializer &&
-                ((ChangedDeserializer) this.valDeserializer).inner() == null)
+                ((ChangedDeserializer) this.valDeserializer).inner() == null) {
             ((ChangedDeserializer) this.valDeserializer).setInner(context.valueSerde().deserializer());
+        }
     }
 
 

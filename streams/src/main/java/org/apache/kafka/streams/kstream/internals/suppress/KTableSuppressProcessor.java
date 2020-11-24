@@ -16,21 +16,19 @@
  */
 package org.apache.kafka.streams.kstream.internals.suppress;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.utils.Bytes;
-import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.errors.StreamsException;
 import org.apache.kafka.streams.kstream.internals.Change;
 import org.apache.kafka.streams.kstream.internals.FullChangeSerde;
+import org.apache.kafka.streams.kstream.internals.metrics.Sensors;
 import org.apache.kafka.streams.kstream.internals.suppress.TimeDefinitions.TimeDefinition;
 import org.apache.kafka.streams.processor.Processor;
 import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.internals.InternalProcessorContext;
 import org.apache.kafka.streams.processor.internals.ProcessorRecordContext;
-import org.apache.kafka.streams.state.internals.ContextualRecord;
 import org.apache.kafka.streams.state.internals.TimeOrderedKeyValueBuffer;
-
-import java.util.Objects;
 
 import static java.util.Objects.requireNonNull;
 
@@ -40,57 +38,49 @@ public class KTableSuppressProcessor<K, V> implements Processor<K, Change<V>> {
     private final long suppressDurationMillis;
     private final TimeDefinition<K> bufferTimeDefinition;
     private final BufferFullStrategy bufferFullStrategy;
-    private final boolean shouldSuppressTombstones;
+    private final boolean safeToDropTombstones;
     private final String storeName;
-    private TimeOrderedKeyValueBuffer buffer;
+
+    private TimeOrderedKeyValueBuffer<K, Change<V>> buffer;
     private InternalProcessorContext internalProcessorContext;
+    private Sensor suppressionEmitSensor;
+    private long observedStreamTime = ConsumerRecord.NO_TIMESTAMP;
 
-    private Serde<K> keySerde;
-    private FullChangeSerde<V> valueSerde;
-
-    public KTableSuppressProcessor(final SuppressedInternal<K> suppress,
-                                   final String storeName,
-                                   final Serde<K> keySerde,
-                                   final FullChangeSerde<V> valueSerde) {
+    public KTableSuppressProcessor(final SuppressedInternal<K> suppress, final String storeName) {
         this.storeName = storeName;
         requireNonNull(suppress);
-        this.keySerde = keySerde;
-        this.valueSerde = valueSerde;
         maxRecords = suppress.bufferConfig().maxRecords();
         maxBytes = suppress.bufferConfig().maxBytes();
         suppressDurationMillis = suppress.timeToWaitForMoreEvents().toMillis();
         bufferTimeDefinition = suppress.timeDefinition();
         bufferFullStrategy = suppress.bufferConfig().bufferFullStrategy();
-        shouldSuppressTombstones = suppress.shouldSuppressTombstones();
+        safeToDropTombstones = suppress.safeToDropTombstones();
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public void init(final ProcessorContext context) {
         internalProcessorContext = (InternalProcessorContext) context;
-        keySerde = keySerde == null ? (Serde<K>) context.keySerde() : keySerde;
-        valueSerde = valueSerde == null ? FullChangeSerde.castOrWrap(context.valueSerde()) : valueSerde;
-        buffer = Objects.requireNonNull((TimeOrderedKeyValueBuffer) context.getStateStore(storeName));
+        suppressionEmitSensor = Sensors.suppressionEmitSensor(internalProcessorContext);
+
+        buffer = requireNonNull((TimeOrderedKeyValueBuffer<K, Change<V>>) context.getStateStore(storeName));
+        buffer.setSerdesIfNull((Serde<K>) context.keySerde(), FullChangeSerde.castOrWrap((Serde<V>) context.valueSerde()));
     }
 
     @Override
     public void process(final K key, final Change<V> value) {
+        observedStreamTime = Math.max(observedStreamTime, internalProcessorContext.timestamp());
         buffer(key, value);
         enforceConstraints();
     }
 
     private void buffer(final K key, final Change<V> value) {
         final long bufferTime = bufferTimeDefinition.time(internalProcessorContext, key);
-        final ProcessorRecordContext recordContext = internalProcessorContext.recordContext();
-
-        final Bytes serializedKey = Bytes.wrap(keySerde.serializer().serialize(null, key));
-        final byte[] serializedValue = valueSerde.serializer().serialize(null, value);
-
-        buffer.put(bufferTime, serializedKey, new ContextualRecord(serializedValue, recordContext));
+        buffer.put(bufferTime, key, value, internalProcessorContext.recordContext());
     }
 
     private void enforceConstraints() {
-        final long streamTime = internalProcessorContext.streamTime();
+        final long streamTime = observedStreamTime;
         final long expiryTime = streamTime - suppressDurationMillis;
 
         buffer.evictWhile(() -> buffer.minTimestamp() <= expiryTime, this::emit);
@@ -107,6 +97,11 @@ public class KTableSuppressProcessor<K, V> implements Processor<K, Change<V>> {
                         buffer.numRecords(), maxRecords,
                         buffer.bufferSize(), maxBytes
                     ));
+                default:
+                    throw new UnsupportedOperationException(
+                        "The bufferFullStrategy [" + bufferFullStrategy +
+                            "] is not implemented. This is a bug in Kafka Streams."
+                    );
             }
         }
     }
@@ -115,14 +110,13 @@ public class KTableSuppressProcessor<K, V> implements Processor<K, Change<V>> {
         return buffer.numRecords() > maxRecords || buffer.bufferSize() > maxBytes;
     }
 
-    private void emit(final KeyValue<Bytes, ContextualRecord> toEmit) {
-        final Change<V> value = valueSerde.deserializer().deserialize(null, toEmit.value.value());
-        if (shouldForward(value)) {
+    private void emit(final TimeOrderedKeyValueBuffer.Eviction<K, Change<V>> toEmit) {
+        if (shouldForward(toEmit.value())) {
             final ProcessorRecordContext prevRecordContext = internalProcessorContext.recordContext();
-            internalProcessorContext.setRecordContext(toEmit.value.recordContext());
+            internalProcessorContext.setRecordContext(toEmit.recordContext());
             try {
-                final K key = keySerde.deserializer().deserialize(null, toEmit.key.get());
-                internalProcessorContext.forward(key, value);
+                internalProcessorContext.forward(toEmit.key(), toEmit.value());
+                suppressionEmitSensor.record();
             } finally {
                 internalProcessorContext.setRecordContext(prevRecordContext);
             }
@@ -130,7 +124,7 @@ public class KTableSuppressProcessor<K, V> implements Processor<K, Change<V>> {
     }
 
     private boolean shouldForward(final Change<V> value) {
-        return !(value.newValue == null && shouldSuppressTombstones);
+        return value.newValue != null || !safeToDropTombstones;
     }
 
     @Override

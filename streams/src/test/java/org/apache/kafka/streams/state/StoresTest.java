@@ -17,15 +17,21 @@
 package org.apache.kafka.streams.state;
 
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.processor.StateStore;
 import org.apache.kafka.streams.state.internals.InMemoryKeyValueStore;
 import org.apache.kafka.streams.state.internals.MemoryNavigableLRUCache;
+import org.apache.kafka.streams.state.internals.RocksDBSegmentedBytesStore;
 import org.apache.kafka.streams.state.internals.RocksDBSessionStore;
 import org.apache.kafka.streams.state.internals.RocksDBStore;
+import org.apache.kafka.streams.state.internals.RocksDBTimestampedSegmentedBytesStore;
+import org.apache.kafka.streams.state.internals.RocksDBTimestampedStore;
 import org.apache.kafka.streams.state.internals.RocksDBWindowStore;
+import org.apache.kafka.streams.state.internals.WrappedStateStore;
 import org.junit.Test;
 
 import static java.time.Duration.ZERO;
 import static java.time.Duration.ofMillis;
+import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.IsInstanceOf.instanceOf;
@@ -113,12 +119,17 @@ public class StoresTest {
 
     @Test
     public void shouldCreateRocksDbStore() {
-        assertThat(Stores.persistentKeyValueStore("store").get(), instanceOf(RocksDBStore.class));
+        assertThat(
+            Stores.persistentKeyValueStore("store").get(),
+            allOf(not(instanceOf(RocksDBTimestampedStore.class)), instanceOf(RocksDBStore.class)));
     }
 
     @Test
     public void shouldCreateRocksDbWindowStore() {
-        assertThat(Stores.persistentWindowStore("store", ofMillis(1L), ofMillis(1L), false).get(), instanceOf(RocksDBWindowStore.class));
+        final WindowStore store = Stores.persistentWindowStore("store", ofMillis(1L), ofMillis(1L), false).get();
+        final StateStore wrapped = ((WrappedStateStore) store).wrapped();
+        assertThat(store, instanceOf(RocksDBWindowStore.class));
+        assertThat(wrapped, allOf(not(instanceOf(RocksDBTimestampedSegmentedBytesStore.class)), instanceOf(RocksDBSegmentedBytesStore.class)));
     }
 
     @Test

@@ -17,7 +17,9 @@
 package org.apache.kafka.connect.runtime;
 
 import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.Configurable;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
@@ -69,6 +71,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 
 import static org.apache.kafka.connect.runtime.errors.RetryWithToleranceOperatorTest.NOOP_OPERATOR;
 import static org.easymock.EasyMock.anyObject;
@@ -87,8 +90,12 @@ public class WorkerTest extends ThreadedTest {
     private static final ConnectorTaskId TASK_ID = new ConnectorTaskId("job", 0);
     private static final String WORKER_ID = "localhost:8083";
 
+    private Map<String, String> workerProps = new HashMap<>();
     private WorkerConfig config;
     private Worker worker;
+
+    private Map<String, String> defaultProducerConfigs = new HashMap<>();
+    private Map<String, String> defaultConsumerConfigs = new HashMap<>();
 
     @Mock
     private Plugins plugins;
@@ -112,12 +119,11 @@ public class WorkerTest extends ThreadedTest {
     @Mock private Converter taskKeyConverter;
     @Mock private Converter taskValueConverter;
     @Mock private HeaderConverter taskHeaderConverter;
+    @Mock private ExecutorService executorService;
 
     @Before
     public void setup() {
         super.setup();
-
-        Map<String, String> workerProps = new HashMap<>();
         workerProps.put("key.converter", "org.apache.kafka.connect.json.JsonConverter");
         workerProps.put("value.converter", "org.apache.kafka.connect.json.JsonConverter");
         workerProps.put("internal.key.converter", "org.apache.kafka.connect.json.JsonConverter");
@@ -128,11 +134,30 @@ public class WorkerTest extends ThreadedTest {
         workerProps.put(CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG, MockMetricsReporter.class.getName());
         config = new StandaloneConfig(workerProps);
 
+        defaultProducerConfigs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        defaultProducerConfigs.put(
+            ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
+        defaultProducerConfigs.put(
+            ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
+        defaultProducerConfigs.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
+        defaultProducerConfigs.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, Long.toString(Long.MAX_VALUE));
+        defaultProducerConfigs.put(ProducerConfig.ACKS_CONFIG, "all");
+        defaultProducerConfigs.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "1");
+        defaultProducerConfigs.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
+
+        defaultConsumerConfigs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        defaultConsumerConfigs.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        defaultConsumerConfigs.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        defaultConsumerConfigs
+            .put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        defaultConsumerConfigs
+            .put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+
         PowerMock.mockStatic(Plugins.class);
     }
 
     @Test
-    public void testStartAndStopConnector() throws Exception {
+    public void testStartAndStopConnector() {
         expectConverters();
         expectStartStorage();
 
@@ -201,7 +226,7 @@ public class WorkerTest extends ThreadedTest {
     }
 
     @Test
-    public void testStartConnectorFailure() throws Exception {
+    public void testStartConnectorFailure() {
         expectConverters();
         expectStartStorage();
 
@@ -245,7 +270,7 @@ public class WorkerTest extends ThreadedTest {
     }
 
     @Test
-    public void testAddConnectorByAlias() throws Exception {
+    public void testAddConnectorByAlias() {
         expectConverters();
         expectStartStorage();
 
@@ -309,7 +334,7 @@ public class WorkerTest extends ThreadedTest {
     }
 
     @Test
-    public void testAddConnectorByShortAlias() throws Exception {
+    public void testAddConnectorByShortAlias() {
         expectConverters();
         expectStartStorage();
 
@@ -385,7 +410,7 @@ public class WorkerTest extends ThreadedTest {
     }
 
     @Test
-    public void testReconfigureConnectorTasks() throws Exception {
+    public void testReconfigureConnectorTasks() {
         expectConverters();
         expectStartStorage();
 
@@ -488,7 +513,7 @@ public class WorkerTest extends ThreadedTest {
                 anyObject(JsonConverter.class),
                 anyObject(JsonConverter.class),
                 anyObject(JsonConverter.class),
-                EasyMock.eq(new TransformationChain(Collections.emptyList(), NOOP_OPERATOR)),
+                EasyMock.eq(new TransformationChain<>(Collections.emptyList(), NOOP_OPERATOR)),
                 anyObject(KafkaProducer.class),
                 anyObject(OffsetStorageReader.class),
                 anyObject(OffsetStorageWriter.class),
@@ -520,8 +545,7 @@ public class WorkerTest extends ThreadedTest {
         expectTaskValueConverters(ClassLoaderUsage.CURRENT_CLASSLOADER, taskValueConverter);
         expectTaskHeaderConverter(ClassLoaderUsage.CURRENT_CLASSLOADER, taskHeaderConverter);
 
-        workerTask.run();
-        EasyMock.expectLastCall();
+        EasyMock.expect(executorService.submit(workerTask)).andReturn(null);
 
         EasyMock.expect(plugins.delegatingLoader()).andReturn(delegatingLoader);
         EasyMock.expect(delegatingLoader.connectorLoader(WorkerTestConnector.class.getName()))
@@ -545,7 +569,7 @@ public class WorkerTest extends ThreadedTest {
 
         PowerMock.replayAll();
 
-        worker = new Worker(WORKER_ID, new MockTime(), plugins, config, offsetBackingStore);
+        worker = new Worker(WORKER_ID, new MockTime(), plugins, config, offsetBackingStore, executorService);
         worker.start();
         assertStatistics(worker, 0, 0);
         assertStartupStatistics(worker, 0, 0, 0, 0);
@@ -567,7 +591,7 @@ public class WorkerTest extends ThreadedTest {
     }
 
     @Test
-    public void testStartTaskFailure() throws Exception {
+    public void testStartTaskFailure() {
         expectConverters();
         expectStartStorage();
 
@@ -627,7 +651,7 @@ public class WorkerTest extends ThreadedTest {
                 anyObject(JsonConverter.class),
                 anyObject(JsonConverter.class),
                 anyObject(JsonConverter.class),
-                EasyMock.eq(new TransformationChain(Collections.emptyList(), NOOP_OPERATOR)),
+                EasyMock.eq(new TransformationChain<>(Collections.emptyList(), NOOP_OPERATOR)),
                 anyObject(KafkaProducer.class),
                 anyObject(OffsetStorageReader.class),
                 anyObject(OffsetStorageWriter.class),
@@ -662,8 +686,7 @@ public class WorkerTest extends ThreadedTest {
         expectTaskHeaderConverter(ClassLoaderUsage.CURRENT_CLASSLOADER, null);
         expectTaskHeaderConverter(ClassLoaderUsage.PLUGINS, taskHeaderConverter);
 
-        workerTask.run();
-        EasyMock.expectLastCall();
+        EasyMock.expect(executorService.submit(workerTask)).andReturn(null);
 
         EasyMock.expect(plugins.delegatingLoader()).andReturn(delegatingLoader);
         EasyMock.expect(delegatingLoader.connectorLoader(WorkerTestConnector.class.getName()))
@@ -689,7 +712,7 @@ public class WorkerTest extends ThreadedTest {
 
         PowerMock.replayAll();
 
-        worker = new Worker(WORKER_ID, new MockTime(), plugins, config, offsetBackingStore);
+        worker = new Worker(WORKER_ID, new MockTime(), plugins, config, offsetBackingStore, executorService);
         worker.start();
         assertStatistics(worker, 0, 0);
         worker.startTask(TASK_ID, ClusterConfigState.EMPTY, anyConnectorConfigMap(), origProps, taskStatusListener, TargetState.STARTED);
@@ -720,7 +743,7 @@ public class WorkerTest extends ThreadedTest {
                 EasyMock.capture(keyConverter),
                 EasyMock.capture(valueConverter),
                 EasyMock.capture(headerConverter),
-                EasyMock.eq(new TransformationChain(Collections.emptyList(), NOOP_OPERATOR)),
+                EasyMock.eq(new TransformationChain<>(Collections.emptyList(), NOOP_OPERATOR)),
                 anyObject(KafkaProducer.class),
                 anyObject(OffsetStorageReader.class),
                 anyObject(OffsetStorageWriter.class),
@@ -755,8 +778,7 @@ public class WorkerTest extends ThreadedTest {
         expectTaskHeaderConverter(ClassLoaderUsage.CURRENT_CLASSLOADER, null);
         expectTaskHeaderConverter(ClassLoaderUsage.PLUGINS, taskHeaderConverter);
 
-        workerTask.run();
-        EasyMock.expectLastCall();
+        EasyMock.expect(executorService.submit(workerTask)).andReturn(null);
 
         EasyMock.expect(plugins.delegatingLoader()).andReturn(delegatingLoader);
         EasyMock.expect(delegatingLoader.connectorLoader(WorkerTestConnector.class.getName()))
@@ -780,7 +802,7 @@ public class WorkerTest extends ThreadedTest {
 
         PowerMock.replayAll();
 
-        worker = new Worker(WORKER_ID, new MockTime(), plugins, config, offsetBackingStore);
+        worker = new Worker(WORKER_ID, new MockTime(), plugins, config, offsetBackingStore, executorService);
         worker.start();
         assertStatistics(worker, 0, 0);
         assertEquals(Collections.emptySet(), worker.taskIds());
@@ -802,6 +824,45 @@ public class WorkerTest extends ThreadedTest {
         // We've mocked the Plugin.newConverter method, so we don't currently configure the converters
 
         PowerMock.verifyAll();
+    }
+
+    @Test
+    public void testProducerConfigsWithoutOverrides() {
+        assertEquals(defaultProducerConfigs, Worker.producerConfigs(config));
+    }
+
+    @Test
+    public void testProducerConfigsWithOverrides() {
+        Map<String, String> props = new HashMap<>(workerProps);
+        props.put("producer.acks", "-1");
+        props.put("producer.linger.ms", "1000");
+        WorkerConfig configWithOverrides = new StandaloneConfig(props);
+
+        Map<String, String> expectedConfigs = new HashMap<>(defaultProducerConfigs);
+        expectedConfigs.put("acks", "-1");
+        expectedConfigs.put("linger.ms", "1000");
+        assertEquals(expectedConfigs, Worker.producerConfigs(configWithOverrides));
+    }
+
+    @Test
+    public void testConsumerConfigsWithoutOverrides() {
+        Map<String, String> expectedConfigs = new HashMap<>(defaultConsumerConfigs);
+        expectedConfigs.put("group.id", "connect-test");
+        assertEquals(expectedConfigs, Worker.consumerConfigs(new ConnectorTaskId("test", 1), config));
+    }
+
+    @Test
+    public void testConsumerConfigsWithOverrides() {
+        Map<String, String> props = new HashMap<>(workerProps);
+        props.put("consumer.auto.offset.reset", "latest");
+        props.put("consumer.max.poll.records", "1000");
+        WorkerConfig configWithOverrides = new StandaloneConfig(props);
+
+        Map<String, String> expectedConfigs = new HashMap<>(defaultConsumerConfigs);
+        expectedConfigs.put("group.id", "connect-test");
+        expectedConfigs.put("auto.offset.reset", "latest");
+        expectedConfigs.put("max.poll.records", "1000");
+        assertEquals(expectedConfigs, Worker.consumerConfigs(new ConnectorTaskId("test", 1), configWithOverrides));
     }
 
     private void assertStatistics(Worker worker, int connectors, int tasks) {
@@ -859,6 +920,7 @@ public class WorkerTest extends ThreadedTest {
         expectConverters(JsonConverter.class, expectDefaultConverters);
     }
 
+    @SuppressWarnings("deprecation")
     private void expectConverters(Class<? extends Converter> converterClass, Boolean expectDefaultConverters) {
         // As default converters are instantiated when a task starts, they are expected only if the `startTask` method is called
         if (expectDefaultConverters) {

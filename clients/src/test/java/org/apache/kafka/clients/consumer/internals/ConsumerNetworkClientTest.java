@@ -24,20 +24,27 @@ import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.errors.DisconnectException;
+import org.apache.kafka.common.errors.InvalidTopicException;
 import org.apache.kafka.common.errors.TimeoutException;
+import org.apache.kafka.common.errors.TopicAuthorizationException;
 import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.internals.ClusterResourceListeners;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.HeartbeatRequest;
 import org.apache.kafka.common.requests.HeartbeatResponse;
+import org.apache.kafka.common.requests.MetadataResponse;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.MockTime;
 import org.apache.kafka.test.TestUtils;
 import org.junit.Test;
 
+import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -50,10 +57,11 @@ public class ConsumerNetworkClientTest {
 
     private String topicName = "test";
     private MockTime time = new MockTime(1);
-    private MockClient client = new MockClient(time);
     private Cluster cluster = TestUtils.singletonCluster(topicName, 1);
     private Node node = cluster.nodes().get(0);
-    private Metadata metadata = new Metadata(0, Long.MAX_VALUE, true);
+    private Metadata metadata = new Metadata(100, 50000, new LogContext(),
+            new ClusterResourceListeners());
+    private MockClient client = new MockClient(time, metadata);
     private ConsumerNetworkClient consumerClient = new ConsumerNetworkClient(new LogContext(),
             client, metadata, time, 100, 1000, Integer.MAX_VALUE);
 
@@ -75,7 +83,7 @@ public class ConsumerNetworkClientTest {
     }
 
     @Test
-    public void sendWithinBlackoutPeriodAfterAuthenticationFailure() throws InterruptedException {
+    public void sendWithinBlackoutPeriodAfterAuthenticationFailure() {
         client.authenticationFailed(node, 300);
         client.prepareResponse(heartbeatResponse(Errors.NONE));
         final RequestFuture<ClientResponse> future = consumerClient.send(node, heartbeat());
@@ -223,6 +231,34 @@ public class ConsumerNetworkClientTest {
     }
 
     @Test
+    public void testAuthenticationExceptionPropagatedFromMetadata() {
+        metadata.failedUpdate(time.milliseconds(), new AuthenticationException("Authentication failed"));
+        try {
+            consumerClient.poll(time.timer(Duration.ZERO));
+            fail("Expected authentication error thrown");
+        } catch (AuthenticationException e) {
+            // After the exception is raised, it should have been cleared
+            assertNull(metadata.getAndClearAuthenticationException());
+        }
+    }
+
+    @Test(expected = InvalidTopicException.class)
+    public void testInvalidTopicExceptionPropagatedFromMetadata() {
+        MetadataResponse metadataResponse = TestUtils.metadataUpdateWith("clusterId", 1,
+                Collections.singletonMap("topic", Errors.INVALID_TOPIC_EXCEPTION), Collections.emptyMap());
+        metadata.update(metadataResponse, time.milliseconds());
+        consumerClient.poll(time.timer(Duration.ZERO));
+    }
+
+    @Test(expected = TopicAuthorizationException.class)
+    public void testTopicAuthorizationExceptionPropagatedFromMetadata() {
+        MetadataResponse metadataResponse = TestUtils.metadataUpdateWith("clusterId", 1,
+                Collections.singletonMap("topic", Errors.TOPIC_AUTHORIZATION_FAILED), Collections.emptyMap());
+        metadata.update(metadataResponse, time.milliseconds());
+        consumerClient.poll(time.timer(Duration.ZERO));
+    }
+
+    @Test
     public void testFutureCompletionOutsidePoll() throws Exception {
         // Tests the scenario in which the request that is being awaited in one thread
         // is received and completed in another thread.
@@ -273,7 +309,7 @@ public class ConsumerNetworkClientTest {
         int requestTimeoutMs = 10;
         final AtomicBoolean isReady = new AtomicBoolean();
         final AtomicBoolean disconnected = new AtomicBoolean();
-        client = new MockClient(time) {
+        client = new MockClient(time, metadata) {
             @Override
             public boolean ready(Node node, long now) {
                 if (isReady.get())

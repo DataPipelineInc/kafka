@@ -48,14 +48,14 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import static java.time.Duration.ofSeconds;
-import static org.apache.kafka.common.utils.Utils.mkList;
+import static java.util.Arrays.asList;
 import static org.apache.kafka.common.utils.Utils.mkSet;
 import static org.hamcrest.core.IsInstanceOf.instanceOf;
+import static org.hamcrest.MatcherAssert.assertThat;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -170,7 +170,7 @@ public class InternalTopologyBuilderTest {
 
     @Test(expected = NullPointerException.class)
     public void testAddProcessorWithNullParents() {
-        builder.addProcessor("processor", new MockProcessorSupplier(), null);
+        builder.addProcessor("processor", new MockProcessorSupplier(), (String) null);
     }
 
     @Test
@@ -201,7 +201,7 @@ public class InternalTopologyBuilderTest {
 
     @Test(expected = NullPointerException.class)
     public void testAddSinkWithNullParents() {
-        builder.addSink("sink", "topic", null, null, null, null);
+        builder.addSink("sink", "topic", null, null, null, (String) null);
     }
 
     @Test
@@ -346,7 +346,7 @@ public class InternalTopologyBuilderTest {
         builder.addProcessor("processor-1", new MockProcessorSupplier(), "source-1");
 
         builder.addProcessor("processor-2", new MockProcessorSupplier(), "source-2", "processor-1");
-        builder.copartitionSources(mkList("source-1", "source-2"));
+        builder.copartitionSources(asList("source-1", "source-2"));
 
         builder.addProcessor("processor-3", new MockProcessorSupplier(), "source-3", "source-4");
 
@@ -494,7 +494,7 @@ public class InternalTopologyBuilderTest {
 
     @Test(expected = NullPointerException.class)
     public void shouldNotAllowNullTopicChooserWhenAddingSink() {
-        builder.addSink("name", (TopicNameExtractor) null, null, null, null);
+        builder.addSink("name", (TopicNameExtractor<Object, Object>) null, null, null, null);
     }
 
     @Test(expected = NullPointerException.class)
@@ -643,8 +643,8 @@ public class InternalTopologyBuilderTest {
         final InternalTopologyBuilder.TopicsInfo topicsInfo = builder.topicGroups().values().iterator().next();
         final InternalTopicConfig topicConfig = topicsInfo.repartitionSourceTopics.get("appId-foo");
         final Map<String, String> properties = topicConfig.getProperties(Collections.<String, String>emptyMap(), 10000);
-        assertEquals(5, properties.size());
-        assertEquals(String.valueOf(Long.MAX_VALUE), properties.get(TopicConfig.RETENTION_MS_CONFIG));
+        assertEquals(3, properties.size());
+        assertEquals(String.valueOf(-1), properties.get(TopicConfig.RETENTION_MS_CONFIG));
         assertEquals(TopicConfig.CLEANUP_POLICY_DELETE, properties.get(TopicConfig.CLEANUP_POLICY_CONFIG));
         assertEquals("appId-foo", topicConfig.name());
         assertTrue(topicConfig instanceof RepartitionTopicConfig);

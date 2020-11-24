@@ -25,7 +25,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
-class KTableKTableJoinMerger<K, V> implements KTableProcessorSupplier<K, V, V> {
+public class KTableKTableJoinMerger<K, V> implements KTableProcessorSupplier<K, V, V> {
 
     private final KTableProcessorSupplier<K, ?, V> parent1;
     private final KTableProcessorSupplier<K, ?, V> parent2;
@@ -38,6 +38,10 @@ class KTableKTableJoinMerger<K, V> implements KTableProcessorSupplier<K, V, V> {
         this.parent1 = parent1;
         this.parent2 = parent2;
         this.queryableName = queryableName;
+    }
+
+    public String getQueryableName() {
+        return queryableName;
     }
 
     @Override
@@ -78,6 +82,17 @@ class KTableKTableJoinMerger<K, V> implements KTableProcessorSupplier<K, V, V> {
         sendOldValues = true;
     }
 
+    public static <K, V> KTableKTableJoinMerger<K, V> of(final KTableProcessorSupplier<K, ?, V> parent1,
+                                                         final KTableProcessorSupplier<K, ?, V> parent2) {
+        return of(parent1, parent2, null);
+    }
+
+    public static <K, V> KTableKTableJoinMerger<K, V> of(final KTableProcessorSupplier<K, ?, V> parent1,
+                                                         final KTableProcessorSupplier<K, ?, V> parent2,
+                                                         final String queryableName) {
+        return new KTableKTableJoinMerger<>(parent1, parent2, queryableName);
+    }
+
     private class KTableKTableJoinMergeProcessor extends AbstractProcessor<K, Change<V>> {
         private KeyValueStore<K, V> store;
         private TupleForwarder<K, V> tupleForwarder;
@@ -89,7 +104,7 @@ class KTableKTableJoinMerger<K, V> implements KTableProcessorSupplier<K, V, V> {
             if (queryableName != null) {
                 store = (KeyValueStore<K, V>) context.getStateStore(queryableName);
                 tupleForwarder = new TupleForwarder<>(store, context,
-                    new ForwardingCacheFlushListener<K, V>(context, sendOldValues),
+                    new ForwardingCacheFlushListener<K, V>(context),
                     sendOldValues);
             }
         }
@@ -98,9 +113,13 @@ class KTableKTableJoinMerger<K, V> implements KTableProcessorSupplier<K, V, V> {
         public void process(final K key, final Change<V> value) {
             if (queryableName != null) {
                 store.put(key, value.newValue);
-                tupleForwarder.maybeForward(key, value.newValue, value.oldValue);
+                tupleForwarder.maybeForward(key, value.newValue, sendOldValues ? value.oldValue : null);
             } else {
-                context().forward(key, value);
+                if (sendOldValues) {
+                    context().forward(key, value);
+                } else {
+                    context().forward(key, new Change<>(value.newValue, null));
+                }
             }
         }
     }

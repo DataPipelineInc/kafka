@@ -102,7 +102,7 @@ import static org.apache.kafka.common.requests.IsolationLevel.READ_COMMITTED;
  * When increasing {@link ProducerConfig#MAX_BLOCK_MS_CONFIG} to be more resilient to non-available brokers you should also
  * increase {@link ConsumerConfig#MAX_POLL_INTERVAL_MS_CONFIG} using the following guidance:
  * <pre>
- *     max.poll.interval.ms > max.block.ms
+ *     max.poll.interval.ms &gt; max.block.ms
  * </pre>
  *
  *
@@ -582,6 +582,7 @@ public class StreamsConfig extends AbstractConfig {
             .define(COMMIT_INTERVAL_MS_CONFIG,
                     Type.LONG,
                     DEFAULT_COMMIT_INTERVAL_MS,
+                    atLeast(0),
                     Importance.LOW,
                     COMMIT_INTERVAL_MS_DOC)
             .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
@@ -718,13 +719,6 @@ public class StreamsConfig extends AbstractConfig {
         tempConsumerDefaultOverrides.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         tempConsumerDefaultOverrides.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         tempConsumerDefaultOverrides.put("internal.leave.group.on.close", false);
-        // MAX_POLL_INTERVAL_MS_CONFIG needs to be large for streams to handle cases when
-        // streams is recovering data from state stores. We may set it to Integer.MAX_VALUE since
-        // the streams code itself catches most exceptions and acts accordingly without needing
-        // this timeout. Note however that deadlocks are not detected (by definition) so we
-        // are losing the ability to detect them by setting this value to large. Hopefully
-        // deadlocks happen very rarely or never.
-        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
         CONSUMER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
     }
 
@@ -886,10 +880,30 @@ public class StreamsConfig extends AbstractConfig {
         // consumer/producer configurations, log a warning and remove the user defined value from the Map.
         // Thus the default values for these consumer/producer configurations that are suitable for
         // Streams will be used instead.
-        final Object maxInFlightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
-        if (eosEnabled && maxInFlightRequests != null && 5 < (int) maxInFlightRequests) {
-            throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " can't exceed 5 when using the idempotent producer");
+
+        if (eosEnabled) {
+            final Object maxInFlightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+
+            if (maxInFlightRequests != null) {
+                final int maxInFlightRequestsAsInteger;
+                if (maxInFlightRequests instanceof Integer) {
+                    maxInFlightRequestsAsInteger = (Integer) maxInFlightRequests;
+                } else if (maxInFlightRequests instanceof String) {
+                    try {
+                        maxInFlightRequestsAsInteger = Integer.parseInt(((String) maxInFlightRequests).trim());
+                    } catch (final NumberFormatException e) {
+                        throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, maxInFlightRequests, "String value could not be parsed as 32-bit integer");
+                    }
+                } else {
+                    throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, maxInFlightRequests, "Expected value to be a 32-bit integer, but it was a " + maxInFlightRequests.getClass().getName());
+                }
+
+                if (maxInFlightRequestsAsInteger > 5) {
+                    throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, maxInFlightRequestsAsInteger, "Can't exceed 5 when exactly-once processing is enabled");
+                }
+            }
         }
+
         for (final String config: nonConfigurableConfigs) {
             if (clientProvidedProps.containsKey(config)) {
                 final String eosMessage =  PROCESSING_GUARANTEE_CONFIG + " is set to " + EXACTLY_ONCE + ". Hence, ";
@@ -933,8 +947,7 @@ public class StreamsConfig extends AbstractConfig {
      */
     @SuppressWarnings("WeakerAccess")
     @Deprecated
-    public Map<String, Object> getConsumerConfigs(final String groupId,
-                                                  final String clientId) {
+    public Map<String, Object> getConsumerConfigs(final String groupId, final String clientId) {
         return getMainConsumerConfigs(groupId, clientId);
     }
 
@@ -953,8 +966,7 @@ public class StreamsConfig extends AbstractConfig {
      * @return Map of the consumer configuration.
      */
     @SuppressWarnings("WeakerAccess")
-    public Map<String, Object> getMainConsumerConfigs(final String groupId,
-                                                      final String clientId) {
+    public Map<String, Object> getMainConsumerConfigs(final String groupId, final String clientId) {
         final Map<String, Object> consumerProps = getCommonConsumerConfigs();
 
         // Get main consumer override configs
@@ -963,10 +975,11 @@ public class StreamsConfig extends AbstractConfig {
             consumerProps.put(entry.getKey(), entry.getValue());
         }
 
-        // add client id with stream client id prefix, and group id
+        // this is a hack to work around StreamsConfig constructor inside StreamsPartitionAssignor to avoid casting
         consumerProps.put(APPLICATION_ID_CONFIG, groupId);
+        // add client id with stream client id prefix, and group id
         consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-consumer");
+        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId);
 
         // add configs required for stream partition assignor
         consumerProps.put(UPGRADE_FROM_CONFIG, getString(UPGRADE_FROM_CONFIG));
@@ -979,20 +992,16 @@ public class StreamsConfig extends AbstractConfig {
         // add admin retries configs for creating topics
         final AdminClientConfig adminClientDefaultConfig = new AdminClientConfig(getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames()));
         consumerProps.put(adminClientPrefix(AdminClientConfig.RETRIES_CONFIG), adminClientDefaultConfig.getInt(AdminClientConfig.RETRIES_CONFIG));
+        consumerProps.put(adminClientPrefix(AdminClientConfig.RETRY_BACKOFF_MS_CONFIG), adminClientDefaultConfig.getLong(AdminClientConfig.RETRY_BACKOFF_MS_CONFIG));
 
         // verify that producer batch config is no larger than segment size, then add topic configs required for creating topics
         final Map<String, Object> topicProps = originalsWithPrefix(TOPIC_PREFIX, false);
+        final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
 
-        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG))) {
-            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG)).toString());
-            final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
-            final int batchSize;
-            if (producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
-                batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
-            } else {
-                final ProducerConfig producerDefaultConfig = new ProducerConfig(new Properties());
-                batchSize = producerDefaultConfig.getInt(ProducerConfig.BATCH_SIZE_CONFIG);
-            }
+        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_BYTES_CONFIG)) &&
+            producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
+            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_BYTES_CONFIG)).toString());
+            final int batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
 
             if (segmentSize < batchSize) {
                 throw new IllegalArgumentException(String.format("Specified topic segment size %d is is smaller than the configured producer batch size %d, this will cause produced batch not able to be appended to the topic",
@@ -1032,7 +1041,7 @@ public class StreamsConfig extends AbstractConfig {
         // no need to set group id for a restore consumer
         baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
         // add client id with stream client id prefix
-        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-restore-consumer");
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId);
         baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
 
         return baseConsumerProps;
@@ -1092,7 +1101,7 @@ public class StreamsConfig extends AbstractConfig {
 
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
         // add client id with stream client id prefix
-        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-producer");
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId);
 
         return props;
     }
@@ -1111,7 +1120,7 @@ public class StreamsConfig extends AbstractConfig {
         props.putAll(clientProvidedProps);
 
         // add client id with stream client id prefix
-        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-admin");
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId);
 
         return props;
     }

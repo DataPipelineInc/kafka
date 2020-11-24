@@ -66,6 +66,21 @@ class AdminZkClientTest extends ZooKeeperTestHarness with Logging with RackAware
       adminZkClient.createTopicWithAssignment("test", topicConfig, Map(0->Seq(0,1), 1->Seq(0)))
     }
 
+    // partitions should be 0-based
+    intercept[InvalidReplicaAssignmentException] {
+      adminZkClient.createTopicWithAssignment("test", topicConfig, Map(1->Seq(1,2), 2->Seq(1,2)))
+    }
+
+    // partitions should be 0-based and consecutive
+    intercept[InvalidReplicaAssignmentException] {
+      adminZkClient.createTopicWithAssignment("test", topicConfig, Map(0->Seq(1,2), 0->Seq(1,2), 3->Seq(1,2)))
+    }
+
+    // partitions should be 0-based and consecutive
+    intercept[InvalidReplicaAssignmentException] {
+      adminZkClient.createTopicWithAssignment("test", topicConfig, Map(-1->Seq(1,2), 1->Seq(1,2), 2->Seq(1,2), 4->Seq(1,2)))
+    }
+
     // good assignment
     val assignment = Map(0 -> List(0, 1, 2),
                          1 -> List(1, 2, 3))
@@ -141,7 +156,7 @@ class AdminZkClientTest extends ZooKeeperTestHarness with Logging with RackAware
     val topic = "test.topic"
 
     // simulate the ZK interactions that can happen when a topic is concurrently created by multiple processes
-    val zkMock = EasyMock.createNiceMock(classOf[KafkaZkClient])
+    val zkMock: KafkaZkClient = EasyMock.createNiceMock(classOf[KafkaZkClient])
     EasyMock.expect(zkMock.topicExists(topic)).andReturn(false)
     EasyMock.expect(zkMock.getAllTopicsInCluster).andReturn(Seq("some.topic", topic, "some.other.topic"))
     EasyMock.replay(zkMock)
@@ -170,7 +185,7 @@ class AdminZkClientTest extends ZooKeeperTestHarness with Logging with RackAware
       assertEquals(props, savedProps)
     }
 
-    TestUtils.assertConcurrent("Concurrent topic creation failed", Seq(createTopic, createTopic),
+    TestUtils.assertConcurrent("Concurrent topic creation failed", Seq(() => createTopic, () => createTopic),
       JTestUtils.DEFAULT_MAX_WAIT_MS.toInt)
   }
 
@@ -313,8 +328,8 @@ class AdminZkClientTest extends ZooKeeperTestHarness with Logging with RackAware
     // Test that the existing clientId overrides are read
     val server = TestUtils.createServer(KafkaConfig.fromProps(TestUtils.createBrokerConfig(0, zkConnect)))
     servers = Seq(server)
-    assertEquals(new Quota(1000, true), server.apis.quotas.produce.quota("ANONYMOUS", clientId))
-    assertEquals(new Quota(2000, true), server.apis.quotas.fetch.quota("ANONYMOUS", clientId))
+    assertEquals(new Quota(1000, true), server.dataPlaneRequestProcessor.quotas.produce.quota("ANONYMOUS", clientId))
+    assertEquals(new Quota(2000, true), server.dataPlaneRequestProcessor.quotas.fetch.quota("ANONYMOUS", clientId))
   }
 
   @Test

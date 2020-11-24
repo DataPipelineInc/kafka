@@ -35,11 +35,13 @@ import scala.collection.JavaConverters._
 /**
   * Tests for the deprecated Scala AdminClient.
   */
+@deprecated("The Scala AdminClient has been deprecated in favour of org.apache.kafka.clients.admin.AdminClient",
+  since = "0.11.0")
 class LegacyAdminClientTest extends IntegrationTestHarness with Logging {
 
   val producerCount = 1
   val consumerCount = 2
-  val serverCount = 3
+  val brokerCount = 3
   val groupId = "my-test"
   val clientId = "consumer-498"
 
@@ -68,7 +70,7 @@ class LegacyAdminClientTest extends IntegrationTestHarness with Logging {
   override def setUp() {
     super.setUp()
     client = AdminClient.createSimplePlaintext(this.brokerList)
-    createTopic(topic, 2, serverCount)
+    createTopic(topic, 2, brokerCount)
   }
 
   @After
