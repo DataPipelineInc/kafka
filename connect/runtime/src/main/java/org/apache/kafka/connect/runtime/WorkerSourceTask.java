@@ -556,16 +556,23 @@ class WorkerSourceTask extends WorkerTask {
         }
 
         // Now we can actually flush the offsets to user storage.
-        Future<Void> flushFuture = offsetWriter.doFlush(transactional ? producer : null, new org.apache.kafka.connect.util.Callback<Void>() {
-            @Override
-            public void onCompletion(Throwable error, Void result) {
-                if (error != null) {
-                    log.error("{} Failed to flush offsets to storage: ", WorkerSourceTask.this, error);
-                } else {
-                    log.trace("{} Finished flushing offsets to storage", WorkerSourceTask.this);
+        Future<Void> flushFuture;
+        try {
+            flushFuture = offsetWriter.doFlush(transactional ? producer : null, new org.apache.kafka.connect.util.Callback<Void>() {
+                @Override
+                public void onCompletion(Throwable error, Void result) {
+                    if (error != null) {
+                        log.error("{} Failed to flush offsets to storage: ", WorkerSourceTask.this, error);
+                    } else {
+                        log.trace("{} Finished flushing offsets to storage", WorkerSourceTask.this);
+                    }
                 }
-            }
-        });
+            });
+        } catch (KafkaException kafkaException) {
+            flushFuture = null;
+            log.error("{} Failed to send flush offsets request via producer: ", WorkerSourceTask.this, kafkaException);
+            producerSendException.compareAndSet(null, kafkaException);
+        }
         // Very rare case: offsets were unserializable and we finished immediately, unable to store
         // any data
         if (flushFuture == null) {
