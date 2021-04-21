@@ -28,6 +28,7 @@ import java.util.concurrent.locks.ReentrantLock
 import com.yammer.metrics.core.Gauge
 import kafka.api.{ApiVersion, KAFKA_0_10_1_IV0, KAFKA_2_1_IV0, KAFKA_2_1_IV1, KAFKA_2_3_IV0}
 import kafka.common.{MessageFormatter, OffsetAndMetadata}
+import kafka.log.AppendOrigin
 import kafka.metrics.KafkaMetricsGroup
 import kafka.server.ReplicaManager
 import kafka.utils.CoreUtils.inLock
@@ -281,7 +282,7 @@ class GroupMetadataManager(brokerId: Int,
       timeout = config.offsetCommitTimeoutMs.toLong,
       requiredAcks = config.offsetCommitRequiredAcks,
       internalTopicsAllowed = true,
-      isFromClient = false,
+      origin = AppendOrigin.Coordinator,
       entriesPerPartition = records,
       delayedProduceLock = Some(group.lock),
       responseCallback = callback)
@@ -780,8 +781,8 @@ class GroupMetadataManager(brokerId: Int,
               try {
                 // do not need to require acks since even if the tombstone is lost,
                 // it will be appended again in the next purge cycle
-                val records = MemoryRecords.withRecords(magicValue, 0L, compressionType, timestampType, tombstones: _*)
-                partition.appendRecordsToLeader(records, isFromClient = false, requiredAcks = 0)
+                val records = MemoryRecords.withRecords(magicValue, 0L, compressionType, timestampType, tombstones.toArray: _*)
+                partition.appendRecordsToLeader(records, origin = AppendOrigin.Coordinator, requiredAcks = 0)
 
                 offsetsRemoved += removedOffsets.size
                 trace(s"Successfully appended ${tombstones.size} tombstones to $appendPartition for expired/deleted " +
@@ -1073,6 +1074,7 @@ object GroupMetadataManager {
 
   private val CURRENT_OFFSET_KEY_SCHEMA = schemaForKey(CURRENT_OFFSET_KEY_SCHEMA_VERSION)
   private val CURRENT_GROUP_KEY_SCHEMA = schemaForKey(CURRENT_GROUP_KEY_SCHEMA_VERSION)
+  private val CURRENT_GROUP_METADATA_VALUE_SCHEMA_VERSION = GROUP_VALUE_SCHEMAS.keySet.max
 
   private def schemaForKey(version: Int) = {
     val schemaOpt = MESSAGE_TYPE_SCHEMAS.get(version)
@@ -1337,23 +1339,18 @@ object GroupMetadataManager {
       val valueSchema = schemaForGroupValue(version)
       val value = valueSchema.read(buffer)
 
-      if (version >= 0 && version <= 3) {
+      if (version >= 0 && version <= CURRENT_GROUP_METADATA_VALUE_SCHEMA_VERSION) {
         val generationId = value.get(GENERATION_KEY).asInstanceOf[Int]
         val protocolType = value.get(PROTOCOL_TYPE_KEY).asInstanceOf[String]
         val protocol = value.get(PROTOCOL_KEY).asInstanceOf[String]
         val leaderId = value.get(LEADER_KEY).asInstanceOf[String]
         val memberMetadataArray = value.getArray(MEMBERS_KEY)
         val initialState = if (memberMetadataArray.isEmpty) Empty else Stable
-        val currentStateTimestamp: Option[Long] = version match {
-          case version if version == 2 =>
-            if (value.hasField(CURRENT_STATE_TIMESTAMP_KEY)) {
-              val timestamp = value.getLong(CURRENT_STATE_TIMESTAMP_KEY)
-              if (timestamp == -1) None else Some(timestamp)
-            } else
-              None
-          case _ =>
-            None
-        }
+        val currentStateTimestamp: Option[Long] =
+          if (version >= 2 && value.hasField(CURRENT_STATE_TIMESTAMP_KEY)) {
+            val timestamp = value.getLong(CURRENT_STATE_TIMESTAMP_KEY)
+            if (timestamp == -1) None else Some(timestamp)
+          } else None
 
         val members = memberMetadataArray.map { memberMetadataObj =>
           val memberMetadata = memberMetadataObj.asInstanceOf[Struct]
