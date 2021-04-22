@@ -139,7 +139,7 @@ public class WorkerConfig extends AbstractConfig {
     public static final String AUTO_OFFSET_RESET_CONFIG = "auto.offset.reset";
     private static final String AUTO_OFFSET_RESET_DOC
             = "Auto Offset reset mode for consumer.";
-    public static final String  AUTO_OFFSET_RESET_CONFIG_DEFAULT = "earliest_if_missing";
+    public static final String AUTO_OFFSET_RESET_CONFIG_DEFAULT = "earliest";
 
     /**
      * @deprecated As of 1.1.0.
